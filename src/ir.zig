@@ -1,12 +1,13 @@
 const std = @import("std");
 const Val = @import("val.zig").Val;
 const Ast = @import("Ast.zig");
+const MemoryManager = @import("MemoryManager.zig");
 
 /// Holds the intermediate representation. This is somewhere between the AST and bytecode in level
 /// of complexity.
 pub const Ir = union(enum) {
     /// A single constant value.
-    constant: Val,
+    constant: Const,
     /// Dereference an identifier.
     deref: []const u8,
     /// Get the nth element from the function call stack.
@@ -31,16 +32,49 @@ pub const Ir = union(enum) {
         name: []const u8,
         exprs: []*Ir,
     },
+    ret: struct {
+        exprs: []*Ir,
+    },
 
     pub const Error = std.mem.Allocator.Error || error{ NotImplemented, SyntaxError };
 
+    const Const = union(enum) {
+        none,
+        symbol: []const u8,
+        string: []const u8,
+        boolean: bool,
+        int: i64,
+        float: f64,
+
+        pub fn toVal(self: Const, memory_manager: *MemoryManager) !Val {
+            switch (self) {
+                .none => return .none,
+                .symbol => |s| return try memory_manager.allocateSymbolVal(s),
+                .string => |s| return try memory_manager.allocateStringVal(s),
+                .boolean => |b| return .{ .boolean = b },
+                .int => |i| return .{ .int = i },
+                .float => |f| return .{ .float = f },
+            }
+        }
+    };
+
     /// Initialize an Ir from an AST.
-    pub fn init(allocator: std.mem.Allocator, ast: *const Ast) !*Ir {
+    pub fn init(allocator: std.mem.Allocator, ast: *const Ast.Node) !*Ir {
         var builder = IrBuilder{
             .allocator = allocator,
-            .arg_to_idx = std.StringHashMap(usize).init(allocator),
+            .arg_to_idx = .{},
         };
-        return builder.build("_", ast);
+        const exprs = try allocator.alloc(*Ir, 1);
+        errdefer allocator.free(exprs);
+        exprs[0] = try builder.build("_", ast);
+        errdefer exprs[0].deinit(allocator);
+        const ret = try allocator.create(Ir);
+        ret.* = Ir{
+            .ret = .{
+                .exprs = exprs,
+            },
+        };
+        return ret;
     }
 
     /// Initialize an Ir from a string expression.
@@ -49,17 +83,13 @@ pub const Ir = union(enum) {
         defer asts.deinit();
         // Only a single ast is supported.
         if (asts.asts.len != 1) return Error.SyntaxError;
-        var builder = IrBuilder{
-            .allocator = allocator,
-            .arg_to_idx = std.StringHashMap(usize).init(allocator),
-        };
-        return builder.build("_", &asts.asts[0]);
+        return init(allocator, &asts.asts[0]);
     }
 
     /// Deallocate Ir and all related memory.
     pub fn deinit(self: *Ir, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .constant => |*v| v.deinit(allocator),
+            .constant => {},
             .deref => {},
             .get_arg => {},
             .function_call => |*f| {
@@ -76,6 +106,10 @@ pub const Ir = union(enum) {
                 for (l.exprs) |e| e.deinit(allocator);
                 allocator.free(l.exprs);
             },
+            .ret => |ret| {
+                for (ret.exprs) |e| e.deinit(allocator);
+                allocator.free(ret.exprs);
+            },
         }
         allocator.destroy(self);
     }
@@ -88,6 +122,7 @@ pub const Ir = union(enum) {
             .function_call => |f| try writer.print("funcall({any}, {any}) ", .{ f.function, f.args }),
             .if_expr => |e| try writer.print("if({any}, {any}, {any}) ", .{ e.predicate, e.true_expr, e.false_expr }),
             .lambda => |l| try writer.print("lambda({any}) ", .{l.exprs}),
+            .ret => |r| try writer.print("ret({any}) ", .{r.exprs}),
         }
         try writer.print("\n", .{});
     }
@@ -95,7 +130,7 @@ pub const Ir = union(enum) {
 
 const IrBuilder = struct {
     allocator: std.mem.Allocator,
-    arg_to_idx: std.StringHashMap(usize),
+    arg_to_idx: std.StringHashMapUnmanaged(usize),
 
     const Error = Ir.Error;
 
@@ -145,7 +180,7 @@ const IrBuilder = struct {
     }
 
     pub fn deinit(self: *IrBuilder) void {
-        self.arg_to_idx.deinit();
+        self.arg_to_idx.deinit(self.allocator);
     }
 
     /// Build an Ir from a single AST leaf.
@@ -153,10 +188,10 @@ const IrBuilder = struct {
         const v = switch (leaf.*) {
             .keyword => return Error.SyntaxError,
             .identifier => |ident| return self.buildDeref(ident),
-            .string => |s| try Val.initString(self.allocator, s),
-            .boolean => Val{ .boolean = leaf.boolean },
-            .int => Val{ .int = leaf.int },
-            .float => Val{ .float = leaf.float },
+            .string => |s| Ir.Const{ .string = s },
+            .boolean => Ir.Const{ .boolean = leaf.boolean },
+            .int => Ir.Const{ .int = leaf.int },
+            .float => Ir.Const{ .float = leaf.float },
         };
         const ret = try self.allocator.create(Ir);
         errdefer ret.deinit(self.allocator);
@@ -185,12 +220,12 @@ const IrBuilder = struct {
                 else => return Error.SyntaxError,
             },
         };
-        const sym_val = try Val.initSymbol(self.allocator, name);
+        const sym_const = .{ .symbol = name };
         const args = try self.allocator.alloc(*Ir, 2);
         errdefer self.allocator.free(args);
         args[0] = try self.allocator.create(Ir);
         errdefer args[0].deinit(self.allocator);
-        args[0].* = .{ .constant = sym_val };
+        args[0].* = .{ .constant = sym_const };
         args[1] = try self.build(name, def);
         errdefer args[1].deinit(self.allocator);
         const ret = try self.allocator.create(Ir);
@@ -249,7 +284,7 @@ const IrBuilder = struct {
         }
         var lambda_builder = IrBuilder{
             .allocator = self.allocator,
-            .arg_to_idx = std.StringHashMap(usize).init(self.allocator),
+            .arg_to_idx = .{},
         };
         defer lambda_builder.deinit();
         switch (arguments.*) {
@@ -259,7 +294,7 @@ const IrBuilder = struct {
                     switch (arg_name_ast) {
                         .tree => return Error.SyntaxError,
                         .leaf => |l| switch (l) {
-                            .identifier => |ident| try lambda_builder.arg_to_idx.put(ident, arg_idx),
+                            .identifier => |ident| try lambda_builder.arg_to_idx.put(self.allocator, ident, arg_idx),
                             else => return Error.SyntaxError,
                         },
                     }
@@ -286,75 +321,120 @@ const IrBuilder = struct {
 test "parse constant expression" {
     var actual = try Ir.initStrExpr(std.testing.allocator, "1");
     defer actual.deinit(std.testing.allocator);
-    try std.testing.expectEqualDeep(&Ir{ .constant = Val{ .int = 1 } }, actual);
+    try std.testing.expectEqualDeep(
+        &Ir{
+            .ret = .{
+                .exprs = @constCast(&[_]*Ir{
+                    @constCast(&Ir{ .constant = .{ .int = 1 } }),
+                }),
+            },
+        },
+        actual,
+    );
 }
 
 test "parse simple expression" {
     var actual = try Ir.initStrExpr(std.testing.allocator, "(+ 1 2)");
     defer actual.deinit(std.testing.allocator);
-    try std.testing.expectEqualDeep(&Ir{ .function_call = .{
-        .function = @constCast(&Ir{ .deref = "+" }),
-        .args = @constCast(&[_]*Ir{
-            @constCast(&Ir{ .constant = .{ .int = 1 } }),
-            @constCast(&Ir{ .constant = .{ .int = 2 } }),
-        }),
-    } }, actual);
+    try std.testing.expectEqualDeep(&Ir{
+        .ret = .{
+            .exprs = @constCast(&[_]*Ir{
+                @constCast(&Ir{
+                    .function_call = .{
+                        .function = @constCast(&Ir{ .deref = "+" }),
+                        .args = @constCast(&[_]*Ir{
+                            @constCast(&Ir{ .constant = .{ .int = 1 } }),
+                            @constCast(&Ir{ .constant = .{ .int = 2 } }),
+                        }),
+                    },
+                }),
+            }),
+        },
+    }, actual);
 }
 
 test "parse define statement" {
     var actual = try Ir.initStrExpr(std.testing.allocator, "(define x 12)");
     defer actual.deinit(std.testing.allocator);
-    try std.testing.expectEqualDeep(&Ir{ .function_call = .{
-        .function = @constCast(&Ir{ .deref = "%define" }),
-        .args = @constCast(&[_]*Ir{
-            @constCast(&Ir{ .constant = .{ .symbol = "x" } }),
-            @constCast(&Ir{ .constant = .{ .int = 12 } }),
-        }),
-    } }, actual);
+    try std.testing.expectEqualDeep(&Ir{
+        .ret = .{
+            .exprs = @constCast(&[_]*Ir{
+                @constCast(&Ir{
+                    .function_call = .{
+                        .function = @constCast(&Ir{ .deref = "%define" }),
+                        .args = @constCast(&[_]*Ir{
+                            @constCast(&Ir{ .constant = .{ .symbol = @constCast("x") } }),
+                            @constCast(&Ir{ .constant = .{ .int = 12 } }),
+                        }),
+                    },
+                }),
+            }),
+        },
+    }, actual);
 }
 
 test "parse if expression" {
     var actual = try Ir.initStrExpr(std.testing.allocator, "(if true 1 2)");
     defer actual.deinit(std.testing.allocator);
-    try std.testing.expectEqualDeep(&Ir{ .if_expr = .{
-        .predicate = @constCast(&Ir{ .constant = .{ .boolean = true } }),
-        .true_expr = @constCast(&Ir{ .constant = .{ .int = 1 } }),
-        .false_expr = @constCast(&Ir{ .constant = .{ .int = 2 } }),
+    try std.testing.expectEqualDeep(&Ir{ .ret = .{
+        .exprs = @constCast(&[_]*Ir{
+            @constCast(&Ir{
+                .if_expr = .{
+                    .predicate = @constCast(&Ir{ .constant = .{ .boolean = true } }),
+                    .true_expr = @constCast(&Ir{ .constant = .{ .int = 1 } }),
+                    .false_expr = @constCast(&Ir{ .constant = .{ .int = 2 } }),
+                },
+            }),
+        }),
     } }, actual);
 }
 
 test "parse if expression with no false branch" {
     var actual = try Ir.initStrExpr(std.testing.allocator, "(if true 1)");
     defer actual.deinit(std.testing.allocator);
-    try std.testing.expectEqualDeep(&Ir{ .if_expr = .{
-        .predicate = @constCast(&Ir{ .constant = .{ .boolean = true } }),
-        .true_expr = @constCast(&Ir{ .constant = .{ .int = 1 } }),
-        .false_expr = null,
-    } }, actual);
+    try std.testing.expectEqualDeep(&Ir{
+        .ret = .{
+            .exprs = @constCast(&[_]*Ir{
+                @constCast(&Ir{
+                    .if_expr = .{
+                        .predicate = @constCast(&Ir{ .constant = .{ .boolean = true } }),
+                        .true_expr = @constCast(&Ir{ .constant = .{ .int = 1 } }),
+                        .false_expr = null,
+                    },
+                }),
+            }),
+        },
+    }, actual);
 }
 
 test "parse lambda" {
     var actual = try Ir.initStrExpr(std.testing.allocator, "(lambda (a b) (+ a b) (- a b))");
     defer actual.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(&Ir{
-        .lambda = .{
-            .name = "_",
+        .ret = .{
             .exprs = @constCast(&[_]*Ir{
                 @constCast(&Ir{
-                    .function_call = .{
-                        .function = @constCast(&Ir{ .deref = "+" }),
-                        .args = @constCast(&[_]*Ir{
-                            @constCast(&Ir{ .get_arg = 0 }),
-                            @constCast(&Ir{ .get_arg = 1 }),
-                        }),
-                    },
-                }),
-                @constCast(&Ir{
-                    .function_call = .{
-                        .function = @constCast(&Ir{ .deref = "-" }),
-                        .args = @constCast(&[_]*Ir{
-                            @constCast(&Ir{ .get_arg = 0 }),
-                            @constCast(&Ir{ .get_arg = 1 }),
+                    .lambda = .{
+                        .name = "_",
+                        .exprs = @constCast(&[_]*Ir{
+                            @constCast(&Ir{
+                                .function_call = .{
+                                    .function = @constCast(&Ir{ .deref = "+" }),
+                                    .args = @constCast(&[_]*Ir{
+                                        @constCast(&Ir{ .get_arg = 0 }),
+                                        @constCast(&Ir{ .get_arg = 1 }),
+                                    }),
+                                },
+                            }),
+                            @constCast(&Ir{
+                                .function_call = .{
+                                    .function = @constCast(&Ir{ .deref = "-" }),
+                                    .args = @constCast(&[_]*Ir{
+                                        @constCast(&Ir{ .get_arg = 0 }),
+                                        @constCast(&Ir{ .get_arg = 1 }),
+                                    }),
+                                },
+                            }),
                         }),
                     },
                 }),
@@ -381,19 +461,25 @@ test "define on lambda produces named function" {
     var actual = try Ir.initStrExpr(std.testing.allocator, "(define foo (lambda () (lambda () 10)))");
     defer actual.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(&Ir{
-        .function_call = .{
-            .function = @constCast(&Ir{ .deref = "%define" }),
-            .args = @constCast(&[_]*Ir{
-                @constCast(&Ir{ .constant = .{ .symbol = "foo" } }),
+        .ret = .{
+            .exprs = @constCast(&[_]*Ir{
                 @constCast(&Ir{
-                    .lambda = .{
-                        .name = "foo",
-                        .exprs = @constCast(&[_]*Ir{
+                    .function_call = .{
+                        .function = @constCast(&Ir{ .deref = "%define" }),
+                        .args = @constCast(&[_]*Ir{
+                            @constCast(&Ir{ .constant = .{ .symbol = @constCast("foo") } }),
                             @constCast(&Ir{
                                 .lambda = .{
-                                    .name = "_",
+                                    .name = "foo",
                                     .exprs = @constCast(&[_]*Ir{
-                                        @constCast(&Ir{ .constant = .{ .int = 10 } }),
+                                        @constCast(&Ir{
+                                            .lambda = .{
+                                                .name = "_",
+                                                .exprs = @constCast(&[_]*Ir{
+                                                    @constCast(&Ir{ .constant = .{ .int = 10 } }),
+                                                }),
+                                            },
+                                        }),
                                     }),
                                 },
                             }),

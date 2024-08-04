@@ -1,15 +1,18 @@
 const Val = @import("val.zig").Val;
 const ByteCode = @import("ByteCode.zig");
+const Ir = @import("ir.zig").Ir;
+const MemoryManager = @import("MemoryManager.zig");
+const SlicesIter = @import("iter.zig").SlicesIter;
 
 const std = @import("std");
 
 pub const Options = struct {
-    initial_stack_capacity: usize = 4096,
-    initial_frame_capacity: usize = 1024,
+    initial_stack_capacity: usize = 4096 / @sizeOf(Val),
+    initial_frame_capacity: usize = 4096 / @sizeOf(Frame),
 };
 
 const Frame = struct {
-    bytecode: *const ByteCode,
+    bytecode: *ByteCode,
     instruction_idx: usize,
     stack_start: usize,
 };
@@ -17,11 +20,12 @@ const Frame = struct {
 pub fn Vm(comptime options: Options) type {
     return struct {
         const VmImpl = @This();
-        allocator: std.mem.Allocator,
+        memory_manager: MemoryManager,
         stack: std.ArrayListUnmanaged(Val),
         frames: std.ArrayListUnmanaged(Frame),
         symbols: std.StringHashMapUnmanaged(Val),
 
+        /// Create a new virtual machine.
         pub fn init(allocator: std.mem.Allocator) !VmImpl {
             const stack = try std.ArrayListUnmanaged(Val).initCapacity(
                 allocator,
@@ -33,32 +37,64 @@ pub fn Vm(comptime options: Options) type {
             );
             const symbols = std.StringHashMapUnmanaged(Val){};
             return .{
-                .allocator = allocator,
+                .memory_manager = MemoryManager.init(allocator),
                 .stack = stack,
                 .frames = frames,
                 .symbols = symbols,
             };
         }
 
+        /// Deinitialize a virtual machine. Using self after calling deinit is invalid.
         pub fn deinit(self: *VmImpl) void {
-            self.stack.deinit(self.allocator);
-            self.frames.deinit(self.allocator);
-            self.symbols.deinit(self.allocator);
+            self.stack.deinit(self.memory_manager.allocator);
+            self.frames.deinit(self.memory_manager.allocator);
+            self.symbols.deinit(self.memory_manager.allocator);
+            self.memory_manager.deinit();
         }
 
+        /// Run the garbage collector to free up memory.
+        pub fn runGc(self: *VmImpl) void {
+            const ValsIter = struct {
+                stack: SlicesIter(Val),
+                frames: SlicesIter(Frame),
+
+                fn next(iter: *@This()) ?Val {
+                    if (iter.stack.next()) |v| return v;
+                    if (iter.frames.next()) |f| {
+                        return .{ .bytecode = f.bytecode };
+                    }
+                    return null;
+                }
+            };
+            var vals_iter = ValsIter{
+                .stack = SlicesIter(Val).init(self.stack.items),
+            };
+            self.memory_manager.runGc(&vals_iter);
+        }
+
+        /// Bind sym to the given val.
+        ///
+        /// Note: self will take ownership of freeing any memory from val.
         pub fn defineVal(self: *VmImpl, sym: []const u8, val: Val) !void {
-            return self.symbols.put(self.allocator, sym, val);
+            return self.symbols.put(self.memory_manager.allocator, sym, val);
         }
 
+        /// Evaluate a single expression from the string.
+        ///
+        /// Note: Val is only valid until the next garbage collection call.
         pub fn evalStr(self: *VmImpl, expr: []const u8) !Val {
-            var ir = try @import("ir.zig").Ir.initStrExpr(self.allocator, expr);
-            defer ir.deinit(self.allocator);
-            var bc = try ByteCode.init(self.allocator, ir);
-            defer bc.deinit();
-            return self.eval(&bc);
+            var ir = try Ir.initStrExpr(self.memory_manager.allocator, expr);
+            defer ir.deinit(self.memory_manager.allocator);
+            const bc = try ByteCode.init(&self.memory_manager, ir);
+            return self.eval(bc);
         }
 
-        pub fn eval(self: *VmImpl, bc: *ByteCode) !Val {
+        /// Evaluate the function and return the result. If bc is not already owned by self, then
+        /// will take ownership of bc's lifecycle. This means bc.deinit() should not be called.
+        ///
+        /// Note: Val is only valid until the next garbage collection call.
+        pub fn eval(self: *VmImpl, func: Val) !Val {
+            const bc = try func.asByteCode();
             self.stack.clearRetainingCapacity();
             const frame = .{ .bytecode = bc, .instruction_idx = 0, .stack_start = 0 };
             self.frames.appendAssumeCapacity(frame);
@@ -71,14 +107,14 @@ pub fn Vm(comptime options: Options) type {
             var frame = &self.frames.items[self.frames.items.len - 1];
             const instruction = frame.bytecode.instructions.items[frame.instruction_idx];
             switch (instruction) {
-                .push_const => |v| try self.stack.append(self.allocator, v),
+                .push_const => |v| try self.stack.append(self.memory_manager.allocator, v),
                 .deref => |s| {
                     const v = self.symbols.get(s) orelse return error.SymbolNotFound;
-                    try self.stack.append(self.allocator, v);
+                    try self.stack.append(self.memory_manager.allocator, v);
                 },
                 .get_arg => |idx| {
                     const v = self.stack.items[frame.stack_start + idx];
-                    try self.stack.append(self.allocator, v);
+                    try self.stack.append(self.memory_manager.allocator, v);
                 },
                 .eval => |n| {
                     const fn_idx = self.stack.items.len - n;
@@ -91,7 +127,7 @@ pub fn Vm(comptime options: Options) type {
                     self.frames.appendAssumeCapacity(new_frame);
                 },
                 .jump => |n| frame.instruction_idx += n,
-                .jump_if => |n| if (try self.stack.pop().isTruthy()) {
+                .jump_if => |n| if (try self.stack.pop().asBool()) {
                     frame.instruction_idx += n;
                 },
                 .ret => {
@@ -113,24 +149,21 @@ pub fn Vm(comptime options: Options) type {
 test "can eval basic expression" {
     var vm = try Vm(.{}).init(std.testing.allocator);
     defer vm.deinit();
-    var actual = try vm.evalStr("4");
-    defer actual.deinit(vm.allocator);
-    try std.testing.expectEqual(Val.initInt(4), actual);
+    const actual = try vm.evalStr("4");
+    try std.testing.expectEqual(Val{ .int = 4 }, actual);
 }
 
 test "can deref symbols" {
     var vm = try Vm(.{}).init(std.testing.allocator);
     defer vm.deinit();
-    try vm.defineVal("test", try Val.initString(vm.allocator, "test-val"));
-    var actual = try vm.evalStr("test");
-    defer actual.deinit(vm.allocator);
+    try vm.defineVal("test", try vm.memory_manager.allocateStringVal("test-val"));
+    const actual = try vm.evalStr("test");
     try std.testing.expectEqualDeep(Val{ .string = @constCast("test-val") }, actual);
 }
 
 test "lambda can eval" {
     var vm = try Vm(.{}).init(std.testing.allocator);
     defer vm.deinit();
-    var actual = try vm.evalStr("((lambda () true))");
-    defer actual.deinit(vm.allocator);
-    try std.testing.expectEqualDeep(Val.initBoolean(true), actual);
+    const actual = try vm.evalStr("((lambda (x) x) true)");
+    try std.testing.expectEqualDeep(Val{ .boolean = true }, actual);
 }
