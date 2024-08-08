@@ -2,6 +2,7 @@ const ByteCode = @This();
 const Val = @import("val.zig").Val;
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -46,91 +47,6 @@ pub fn iterateVals(self: *const ByteCode) ByteCodeValuesIter {
     };
 }
 
-/// Create a new ByteCode from the Ir.
-pub fn init(memory_manager: *MemoryManager, ir: *const Ir) !Val {
-    var irs = [1]*const Ir{ir};
-    const bc = try initImpl(memory_manager, &irs);
-    return .{ .bytecode = bc };
-}
-
-pub fn initStrExpr(allocator: Allocator, expr: []const u8) !Val {
-    var ir = try Ir.initStrExpr(allocator, expr);
-    defer ir.deinit(allocator);
-    return ByteCode.init(allocator, ir);
-}
-
-fn initImpl(memory_manager: *MemoryManager, irs: []const *const Ir) Allocator.Error!*ByteCode {
-    var self = try memory_manager.allocateByteCode();
-    for (irs) |ir| try self.initAddIr(memory_manager, ir);
-    return self;
-}
-
-fn initAddIr(self: *ByteCode, memory_manager: *MemoryManager, ir: *const Ir) Allocator.Error!void {
-    switch (ir.*) {
-        .constant => |c| {
-            try self.instructions.append(
-                memory_manager.allocator,
-                .{ .push_const = try c.toVal(memory_manager) },
-            );
-        },
-        .deref => |s| {
-            try self.instructions.append(
-                memory_manager.allocator,
-                .{ .deref = try memory_manager.allocator.dupe(u8, s) },
-            );
-        },
-        .get_arg => |n| {
-            try self.instructions.append(
-                memory_manager.allocator,
-                .{ .get_arg = n },
-            );
-        },
-        .function_call => |f| {
-            try self.initAddIr(memory_manager, f.function);
-            for (f.args) |arg| try self.initAddIr(memory_manager, arg);
-            try self.instructions.append(
-                memory_manager.allocator,
-                .{ .eval = f.args.len + 1 },
-            );
-        },
-        .if_expr => |expr| {
-            try self.initAddIr(memory_manager, expr.predicate);
-            var true_bc = try initImpl(memory_manager, (&expr.true_expr)[0..1]);
-            var false_bc = if (expr.false_expr) |f|
-                try initImpl(
-                    memory_manager,
-                    (&f)[0..1],
-                )
-            else
-                try initImpl(memory_manager, &[_]*const Ir{&Ir{ .constant = .none }});
-            try self.instructions.append(
-                memory_manager.allocator,
-                .{ .jump_if = false_bc.instructions.items.len + 1 },
-            );
-            try self.instructions.appendSlice(memory_manager.allocator, false_bc.instructions.items);
-            false_bc.instructions.items.len = 0;
-            try self.instructions.append(
-                memory_manager.allocator,
-                .{ .jump = true_bc.instructions.items.len },
-            );
-            try self.instructions.appendSlice(memory_manager.allocator, true_bc.instructions.items);
-            true_bc.instructions.items.len = 0;
-        },
-        .lambda => |l| {
-            const lambda_bc = try initImpl(memory_manager, l.exprs);
-            try lambda_bc.instructions.append(memory_manager.allocator, .ret);
-            try self.instructions.append(
-                memory_manager.allocator,
-                .{ .push_const = .{ .bytecode = lambda_bc } },
-            );
-        },
-        .ret => |r| {
-            for (r.exprs) |e| try self.initAddIr(memory_manager, e);
-            try self.instructions.append(memory_manager.allocator, .ret);
-        },
-    }
-}
-
 /// Contains a single instruction that can be run by the Vm.
 pub const Instruction = union(enum) {
     /// Push a constant onto the stack.
@@ -160,7 +76,12 @@ pub const Instruction = union(enum) {
     }
 
     /// Pretty print the AST.
-    pub fn format(self: *const Instruction, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    pub fn format(
+        self: *const Instruction,
+        comptime _: []const u8,
+        _: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
         switch (self.*) {
             .push_const => |v| try writer.print("push_const({any})", .{v}),
             .deref => |sym| try writer.print("deref({s})", .{sym}),
@@ -172,57 +93,3 @@ pub const Instruction = union(enum) {
         }
     }
 };
-
-test "if expression" {
-    const ir = Ir{
-        .if_expr = .{
-            .predicate = @constCast(&Ir{ .constant = .{ .boolean = true } }),
-            .true_expr = @constCast(&Ir{ .constant = .{ .int = 1 } }),
-            .false_expr = @constCast(&Ir{ .constant = .{ .int = 2 } }),
-        },
-    };
-    var memory_manager = MemoryManager.init(std.testing.allocator);
-    defer memory_manager.deinit();
-    const actual = try ByteCode.init(&memory_manager, &ir);
-    try std.testing.expectEqualDeep(Val{
-        .bytecode = @constCast(&ByteCode{
-            .instructions = std.ArrayListUnmanaged(Instruction){
-                .items = @constCast(&[_]Instruction{
-                    .{ .push_const = .{ .boolean = true } },
-                    .{ .jump_if = 2 },
-                    .{ .push_const = .{ .int = 2 } },
-                    .{ .jump = 1 },
-                    .{ .push_const = .{ .int = 1 } },
-                }),
-                .capacity = actual.bytecode.instructions.capacity,
-            },
-        }),
-    }, actual);
-}
-
-test "if expression without false branch returns none" {
-    const ir = Ir{
-        .if_expr = .{
-            .predicate = @constCast(&Ir{ .constant = .{ .boolean = true } }),
-            .true_expr = @constCast(&Ir{ .constant = .{ .int = 1 } }),
-            .false_expr = null,
-        },
-    };
-    var memory_manager = MemoryManager.init(std.testing.allocator);
-    defer memory_manager.deinit();
-    const actual = try ByteCode.init(&memory_manager, &ir);
-    try std.testing.expectEqualDeep(Val{
-        .bytecode = @constCast(&ByteCode{
-            .instructions = std.ArrayListUnmanaged(Instruction){
-                .items = @constCast(&[_]Instruction{
-                    .{ .push_const = .{ .boolean = true } },
-                    .{ .jump_if = 2 },
-                    .{ .push_const = .none },
-                    .{ .jump = 1 },
-                    .{ .push_const = .{ .int = 1 } },
-                }),
-                .capacity = actual.bytecode.instructions.capacity,
-            },
-        }),
-    }, actual);
-}

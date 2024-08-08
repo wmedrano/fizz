@@ -1,5 +1,14 @@
 const std = @import("std");
 
+pub fn EmptyIter(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        pub inline fn next(_: *const Self) ?T {
+            return null;
+        }
+    };
+}
+
 pub fn SlicesIter(comptime T: type) type {
     return struct {
         const Self = @This();

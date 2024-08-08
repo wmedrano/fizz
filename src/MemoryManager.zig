@@ -6,7 +6,7 @@ const SlicesIter = @import("iter.zig").SlicesIter;
 const std = @import("std");
 
 allocator: std.mem.Allocator,
-alive_color: Color,
+reachable_color: Color,
 bytecode: std.AutoHashMapUnmanaged(*ByteCode, Color),
 strings: std.StringHashMapUnmanaged(Color),
 
@@ -25,7 +25,7 @@ const Color = enum {
 pub fn init(allocator: std.mem.Allocator) MemoryManager {
     return .{
         .allocator = allocator,
-        .alive_color = Color.red,
+        .reachable_color = Color.red,
         .bytecode = .{},
         .strings = .{},
     };
@@ -40,7 +40,7 @@ pub fn deinit(self: *MemoryManager) void {
 
 pub fn allocateByteCode(self: *MemoryManager) !*ByteCode {
     const bc = try self.allocator.create(ByteCode);
-    try self.bytecode.put(self.allocator, bc, self.alive_color);
+    try self.bytecode.put(self.allocator, bc, self.reachable_color);
     bc.* = ByteCode{
         .instructions = .{},
     };
@@ -52,7 +52,7 @@ pub fn allocateString(self: *MemoryManager, str: []const u8) ![]const u8 {
         return entry.key_ptr.*;
     }
     const str_copy = try self.allocator.dupe(u8, str);
-    try self.strings.putNoClobber(self.allocator, str_copy, self.alive_color);
+    try self.strings.putNoClobber(self.allocator, str_copy, self.reachable_color);
     return str_copy;
 }
 
@@ -64,16 +64,16 @@ pub fn allocateSymbolVal(self: *MemoryManager, sym: []const u8) !Val {
     return .{ .symbol = try self.allocateString(sym) };
 }
 
-fn markVal(self: *MemoryManager, v: Val) !void {
+pub fn markVal(self: *MemoryManager, v: Val) !void {
     switch (v) {
-        .string => |s| try self.strings.put(self.allocator, s, self.alive_color),
-        .symbol => |s| try self.strings.put(self.allocator, s, self.alive_color),
+        .string => |s| try self.strings.put(self.allocator, s, self.reachable_color),
+        .symbol => |s| try self.strings.put(self.allocator, s, self.reachable_color),
         .bytecode => |bc| {
             if (self.bytecode.getEntry(bc)) |entry| {
-                if (entry.value_ptr.* == self.alive_color) return;
-                entry.value_ptr.* = self.alive_color;
+                if (entry.value_ptr.* == self.reachable_color) return;
+                entry.value_ptr.* = self.reachable_color;
             } else {
-                try self.bytecode.put(self.allocator, bc, self.alive_color);
+                try self.bytecode.put(self.allocator, bc, self.reachable_color);
             }
             var vals_iter = bc.iterateVals();
             while (vals_iter.next()) |child_val| try self.markVal(child_val);
@@ -82,10 +82,10 @@ fn markVal(self: *MemoryManager, v: Val) !void {
     }
 }
 
-fn sweep(self: *MemoryManager) !void {
+pub fn sweep(self: *MemoryManager) !void {
     var bytecode_iter = self.bytecode.iterator();
     while (bytecode_iter.next()) |entry| {
-        if (entry.value_ptr.* != self.alive_color) {
+        if (entry.value_ptr.* != self.reachable_color) {
             ByteCode.deinit(entry.key_ptr.*, self.allocator);
             self.bytecode.removeByPtr(entry.key_ptr);
         }
@@ -93,13 +93,13 @@ fn sweep(self: *MemoryManager) !void {
 
     var strings_iter = self.strings.iterator();
     while (strings_iter.next()) |entry| {
-        if (entry.value_ptr.* != self.alive_color) {
+        if (entry.value_ptr.* != self.reachable_color) {
             self.allocator.free(entry.key_ptr.*);
             self.strings.removeByPtr(entry.key_ptr);
         }
     }
 
-    self.alive_color = self.alive_color.swap();
+    self.reachable_color = self.reachable_color.swap();
 }
 
 test "no memory leaks" {

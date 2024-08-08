@@ -2,7 +2,8 @@ const Val = @import("val.zig").Val;
 const ByteCode = @import("ByteCode.zig");
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
-const SlicesIter = @import("iter.zig").SlicesIter;
+const iter = @import("iter.zig");
+const compile = @import("compiler.zig").compile;
 
 const std = @import("std");
 
@@ -53,39 +54,42 @@ pub fn Vm(comptime options: Options) type {
         }
 
         /// Run the garbage collector to free up memory.
-        pub fn runGc(self: *VmImpl) void {
-            const ValsIter = struct {
-                stack: SlicesIter(Val),
-                frames: SlicesIter(Frame),
+        pub fn runGc(self: *VmImpl) !void {
+            try self.runGcKeepAlive(iter.EmptyIter(Val){});
+        }
 
-                fn next(iter: *@This()) ?Val {
-                    if (iter.stack.next()) |v| return v;
-                    if (iter.frames.next()) |f| {
-                        return .{ .bytecode = f.bytecode };
-                    }
-                    return null;
-                }
-            };
-            var vals_iter = ValsIter{
-                .stack = SlicesIter(Val).init(self.stack.items),
-            };
-            self.memory_manager.runGc(&vals_iter);
+        /// Run the garbage collector to free up memory. This also keeps alive any values returned
+        /// by values_iterator.
+        pub fn runGcKeepAlive(self: *VmImpl, values_iterator: anytype) !void {
+            for (self.stack.items) |v| try self.memory_manager.markVal(v);
+            for (self.frames.items) |f| try self.memory_manager.markVal(.{ .bytecode = f.bytecode });
+            while (values_iterator.next()) |v| try self.memory_manager.markVal(v);
+
+            var global_values = self.symbols.iterator();
+            while (global_values.next()) |entry| {
+                try self.memory_manager.markVal(entry.value_ptr.*);
+                try self.memory_manager.markVal(Val{ .string = entry.key_ptr.* });
+            }
+
+            try self.memory_manager.sweep();
         }
 
         /// Bind sym to the given val.
         ///
         /// Note: self will take ownership of freeing any memory from val.
         pub fn defineVal(self: *VmImpl, sym: []const u8, val: Val) !void {
-            return self.symbols.put(self.memory_manager.allocator, sym, val);
+            const interned_sym = try self.memory_manager.allocateString(sym);
+            return self.symbols.put(self.memory_manager.allocator, interned_sym, val);
         }
 
         /// Evaluate a single expression from the string.
         ///
         /// Note: Val is only valid until the next garbage collection call.
         pub fn evalStr(self: *VmImpl, expr: []const u8) !Val {
-            var ir = try Ir.initStrExpr(self.memory_manager.allocator, expr);
-            defer ir.deinit(self.memory_manager.allocator);
-            const bc = try ByteCode.init(&self.memory_manager, ir);
+            var arena = std.heap.ArenaAllocator.init(self.memory_manager.allocator);
+            defer arena.deinit();
+            const ir = try Ir.initStrExpr(arena.allocator(), expr);
+            const bc = try compile(&self.memory_manager, ir);
             return self.eval(bc);
         }
 
@@ -150,6 +154,7 @@ test "can eval basic expression" {
     var vm = try Vm(.{}).init(std.testing.allocator);
     defer vm.deinit();
     const actual = try vm.evalStr("4");
+    try vm.runGc();
     try std.testing.expectEqual(Val{ .int = 4 }, actual);
 }
 
