@@ -1,14 +1,27 @@
 const Val = @import("val.zig").Val;
+const Vm = @import("vm.zig").Vm;
 const Error = Val.NativeFn.Error;
 
 pub fn registerAll(vm: anytype) !void {
+    try vm.defineVal("%define", .{ .native_fn = .{ .impl = define } });
     try vm.defineVal("+", .{ .native_fn = .{ .impl = add } });
     try vm.defineVal("-", .{ .native_fn = .{ .impl = subtract } });
     try vm.defineVal("*", .{ .native_fn = .{ .impl = multiply } });
     try vm.defineVal("/", .{ .native_fn = .{ .impl = divide } });
 }
 
-fn add(vals: []const Val) Error!Val {
+fn define(vm: *Vm, vals: []const Val) Error!Val {
+    if (vals.len != 2) return Error.RuntimeError;
+    switch (vals[0]) {
+        .symbol => |s| {
+            vm.defineVal(s, vals[1]) catch return Error.RuntimeError;
+        },
+        else => return Error.TypeError,
+    }
+    return .none;
+}
+
+fn add(_: *Vm, vals: []const Val) Error!Val {
     var int_sum: i64 = 0;
     var float_sum: f64 = 0.0;
     var has_float = false;
@@ -36,18 +49,18 @@ fn negate(v: Val) Error!Val {
     }
 }
 
-fn subtract(vals: []const Val) Error!Val {
+fn subtract(vm: *Vm, vals: []const Val) Error!Val {
     switch (vals.len) {
         0 => return error.RuntimeError,
         1 => return try negate(vals[0]),
         else => {
-            const rest = try negate(try add(vals[1..]));
-            return try add(&[2]Val{ vals[0], rest });
+            const rest = try negate(try add(vm, vals[1..]));
+            return try add(vm, &[2]Val{ vals[0], rest });
         },
     }
 }
 
-fn multiply(vals: []const Val) Error!Val {
+fn multiply(_: *Vm, vals: []const Val) Error!Val {
     var int_product: i64 = 0;
     var float_product: f64 = 0.0;
     var has_float = false;
@@ -75,13 +88,13 @@ fn reciprocal(v: Val) Error!Val {
     }
 }
 
-fn divide(vals: []const Val) Error!Val {
+fn divide(vm: *Vm, vals: []const Val) Error!Val {
     switch (vals.len) {
         0 => return error.RuntimeError,
         1 => return try reciprocal(vals[0]),
         else => {
-            const divisor = try multiply(vals[1..]);
-            return try multiply(&[2]Val{
+            const divisor = try multiply(vm, vals[1..]);
+            return try multiply(vm, &[2]Val{
                 vals[0],
                 try reciprocal(divisor),
             });

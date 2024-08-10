@@ -6,7 +6,7 @@ const compile = @import("compiler.zig").compile;
 pub fn main() !void {
     var base_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = base_allocator.allocator();
-    var vm = try Vm(.{}).init(allocator);
+    var vm = try Vm.init(.{}, allocator);
     defer vm.deinit();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

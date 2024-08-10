@@ -1,5 +1,6 @@
 const std = @import("std");
 const ByteCode = @import("ByteCode.zig");
+const Vm = @import("vm.zig").Vm;
 
 pub const Val = union(enum) {
     none,
@@ -17,7 +18,7 @@ pub const Val = union(enum) {
             RuntimeError,
         };
 
-        impl: *const fn ([]const Val) Error!Val,
+        impl: *const fn (*Vm, []const Val) Error!Val,
     };
 
     pub fn requiresHeap(self: Val) bool {
