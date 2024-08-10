@@ -4,12 +4,14 @@ const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const iter = @import("iter.zig");
 const compile = @import("compiler.zig").compile;
+const builtins = @import("builtins.zig");
 
 const std = @import("std");
 
 pub const Options = struct {
     initial_stack_capacity: usize = 4096 / @sizeOf(Val),
     initial_frame_capacity: usize = 4096 / @sizeOf(Frame),
+    enable_builtins: bool = true,
 };
 
 const Frame = struct {
@@ -37,12 +39,16 @@ pub fn Vm(comptime options: Options) type {
                 options.initial_stack_capacity,
             );
             const symbols = std.StringHashMapUnmanaged(Val){};
-            return .{
+            var vm = VmImpl{
                 .memory_manager = MemoryManager.init(allocator),
                 .stack = stack,
                 .frames = frames,
                 .symbols = symbols,
             };
+            if (options.enable_builtins) {
+                try builtins.registerAll(&vm);
+            }
+            return vm;
         }
 
         /// Deinitialize a virtual machine. Using self after calling deinit is invalid.
@@ -120,32 +126,47 @@ pub fn Vm(comptime options: Options) type {
                     const v = self.stack.items[frame.stack_start + idx];
                     try self.stack.append(self.memory_manager.allocator, v);
                 },
-                .eval => |n| {
-                    const fn_idx = self.stack.items.len - n;
-                    const func = self.stack.items[fn_idx];
-                    const new_frame = .{
-                        .bytecode = try func.asByteCode(),
-                        .instruction_idx = 0,
-                        .stack_start = fn_idx + 1,
-                    };
-                    self.frames.appendAssumeCapacity(new_frame);
-                },
+                .eval => |n| try self.executeEval(n),
                 .jump => |n| frame.instruction_idx += n,
                 .jump_if => |n| if (try self.stack.pop().asBool()) {
                     frame.instruction_idx += n;
                 },
-                .ret => {
-                    const old_frame = self.frames.pop();
-                    if (self.frames.items.len == 0) {
-                        return false;
-                    }
-                    const ret = self.stack.pop();
-                    self.stack.items = self.stack.items[0..old_frame.stack_start];
-                    self.stack.items[old_frame.stack_start - 1] = ret;
-                },
+                .ret => if (!try self.executeRet()) return false,
             }
             frame.instruction_idx += 1;
             return true;
+        }
+
+        fn executeRet(self: *VmImpl) !bool {
+            const old_frame = self.frames.pop();
+            if (self.frames.items.len == 0) {
+                return false;
+            }
+            const ret = self.stack.pop();
+            self.stack.items = self.stack.items[0..old_frame.stack_start];
+            self.stack.items[old_frame.stack_start - 1] = ret;
+            return true;
+        }
+
+        fn executeEval(self: *VmImpl, n: usize) !void {
+            const fn_idx = self.stack.items.len - n;
+            const func = self.stack.items[fn_idx];
+            const stack_start = fn_idx + 1;
+            switch (func) {
+                .bytecode => |bc| {
+                    const new_frame = .{
+                        .bytecode = bc,
+                        .instruction_idx = 0,
+                        .stack_start = stack_start,
+                    };
+                    self.frames.appendAssumeCapacity(new_frame);
+                },
+                .native_fn => |nf| {
+                    self.stack.items[fn_idx] = try nf.impl(self.stack.items[stack_start..]);
+                    self.stack.items = self.stack.items[0..stack_start];
+                },
+                else => return error.TypeError,
+            }
         }
     };
 }

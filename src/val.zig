@@ -9,6 +9,16 @@ pub const Val = union(enum) {
     string: []const u8,
     symbol: []const u8,
     bytecode: *ByteCode,
+    native_fn: NativeFn,
+
+    pub const NativeFn = struct {
+        pub const Error = error{
+            TypeError,
+            RuntimeError,
+        };
+
+        impl: *const fn ([]const Val) Error!Val,
+    };
 
     pub fn requiresHeap(self: Val) bool {
         switch (self) {
