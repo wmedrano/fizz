@@ -4,6 +4,10 @@ const Error = Val.NativeFn.Error;
 
 pub fn registerAll(vm: anytype) !void {
     try vm.defineVal("%define", .{ .native_fn = .{ .impl = define } });
+    try vm.defineVal("list", .{ .native_fn = .{ .impl = list } });
+    try vm.defineVal("first", .{ .native_fn = .{ .impl = first } });
+    try vm.defineVal("rest", .{ .native_fn = .{ .impl = rest } });
+    try vm.defineVal("len", .{ .native_fn = .{ .impl = len } });
     try vm.defineVal("+", .{ .native_fn = .{ .impl = add } });
     try vm.defineVal("-", .{ .native_fn = .{ .impl = subtract } });
     try vm.defineVal("*", .{ .native_fn = .{ .impl = multiply } });
@@ -19,6 +23,45 @@ fn define(vm: *Vm, vals: []const Val) Error!Val {
         else => return Error.TypeError,
     }
     return .none;
+}
+
+fn list(vm: *Vm, vals: []const Val) Error!Val {
+    if (vals.len == 0) return Val{ .list = &[0]Val{} };
+    var ret = vm.memory_manager.allocateList(vals.len) catch return Error.RuntimeError;
+    for (0..vals.len) |idx| ret[idx] = vals[idx];
+    return .{ .list = ret };
+}
+
+fn first(_: *Vm, vals: []const Val) Error!Val {
+    if (vals.len != 1) return Error.RuntimeError;
+    switch (vals[0]) {
+        .list => |lst| return lst[0],
+        else => return Error.TypeError,
+    }
+}
+
+fn rest(vm: *Vm, vals: []const Val) Error!Val {
+    if (vals.len != 1) return Error.RuntimeError;
+    switch (vals[0]) {
+        .list => |lst| {
+            if (lst.len == 0) return Error.RuntimeError;
+            const slice = lst[1..];
+            const ret = vm.memory_manager.allocateList(slice.len) catch return Error.RuntimeError;
+            for (ret, slice) |*dst, src| {
+                dst.* = src;
+            }
+            return .{ .list = ret };
+        },
+        else => return Error.RuntimeError,
+    }
+}
+
+fn len(_: *Vm, vals: []const Val) Error!Val {
+    if (vals.len != 1) return Error.RuntimeError;
+    switch (vals[0]) {
+        .list => |lst| return .{ .int = @intCast(lst.len) },
+        else => return Error.TypeError,
+    }
 }
 
 fn add(_: *Vm, vals: []const Val) Error!Val {
@@ -54,15 +97,15 @@ fn subtract(vm: *Vm, vals: []const Val) Error!Val {
         0 => return error.RuntimeError,
         1 => return try negate(vals[0]),
         else => {
-            const rest = try negate(try add(vm, vals[1..]));
-            return try add(vm, &[2]Val{ vals[0], rest });
+            const neg = try negate(try add(vm, vals[1..]));
+            return try add(vm, &[2]Val{ vals[0], neg });
         },
     }
 }
 
 fn multiply(_: *Vm, vals: []const Val) Error!Val {
-    var int_product: i64 = 0;
-    var float_product: f64 = 0.0;
+    var int_product: i64 = 1;
+    var float_product: f64 = 1.0;
     var has_float = false;
     for (vals) |v| {
         switch (v) {

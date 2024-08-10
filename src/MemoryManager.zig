@@ -7,8 +7,14 @@ const std = @import("std");
 
 allocator: std.mem.Allocator,
 reachable_color: Color,
-bytecode: std.AutoHashMapUnmanaged(*ByteCode, Color),
 strings: std.StringHashMapUnmanaged(Color),
+lists: std.AutoHashMapUnmanaged([*]Val, LenAndColor),
+bytecode: std.AutoHashMapUnmanaged(*ByteCode, Color),
+
+const LenAndColor = struct {
+    len: usize,
+    color: Color,
+};
 
 const Color = enum {
     red,
@@ -26,8 +32,9 @@ pub fn init(allocator: std.mem.Allocator) MemoryManager {
     return .{
         .allocator = allocator,
         .reachable_color = Color.red,
-        .bytecode = .{},
         .strings = .{},
+        .lists = .{},
+        .bytecode = .{},
     };
 }
 
@@ -35,16 +42,8 @@ pub fn deinit(self: *MemoryManager) void {
     self.sweep() catch {};
     self.sweep() catch {};
     self.strings.deinit(self.allocator);
+    self.lists.deinit(self.allocator);
     self.bytecode.deinit(self.allocator);
-}
-
-pub fn allocateByteCode(self: *MemoryManager) !*ByteCode {
-    const bc = try self.allocator.create(ByteCode);
-    try self.bytecode.put(self.allocator, bc, self.reachable_color);
-    bc.* = ByteCode{
-        .instructions = .{},
-    };
-    return bc;
 }
 
 pub fn allocateString(self: *MemoryManager, str: []const u8) ![]const u8 {
@@ -64,10 +63,39 @@ pub fn allocateSymbolVal(self: *MemoryManager, sym: []const u8) !Val {
     return .{ .symbol = try self.allocateString(sym) };
 }
 
+pub fn allocateList(self: *MemoryManager, len: usize) ![]Val {
+    var lst = try self.allocator.alloc(Val, len);
+    for (0..len) |idx| lst[idx] = .none;
+    try self.lists.put(self.allocator, lst.ptr, .{ .len = len, .color = self.reachable_color });
+    return lst;
+}
+
+pub fn allocateListVal(self: *MemoryManager, len: usize) !Val {
+    return .{ .list = self.allocateList(len) };
+}
+
+pub fn allocateByteCode(self: *MemoryManager) !*ByteCode {
+    const bc = try self.allocator.create(ByteCode);
+    try self.bytecode.put(self.allocator, bc, self.reachable_color);
+    bc.* = ByteCode{
+        .instructions = .{},
+    };
+    return bc;
+}
+
 pub fn markVal(self: *MemoryManager, v: Val) !void {
     switch (v) {
         .string => |s| try self.strings.put(self.allocator, s, self.reachable_color),
         .symbol => |s| try self.strings.put(self.allocator, s, self.reachable_color),
+        .list => |lst| {
+            if (self.lists.getEntry(lst.ptr)) |entry| {
+                if (entry.value_ptr.color == self.reachable_color) return;
+                entry.value_ptr.color = self.reachable_color;
+            } else {
+                try self.lists.put(self.allocator, lst.ptr, .{ .len = lst.len, .color = self.reachable_color });
+            }
+            for (lst) |child_val| try self.markVal(child_val);
+        },
         .bytecode => |bc| {
             if (self.bytecode.getEntry(bc)) |entry| {
                 if (entry.value_ptr.* == self.reachable_color) return;
@@ -83,19 +111,28 @@ pub fn markVal(self: *MemoryManager, v: Val) !void {
 }
 
 pub fn sweep(self: *MemoryManager) !void {
-    var bytecode_iter = self.bytecode.iterator();
-    while (bytecode_iter.next()) |entry| {
-        if (entry.value_ptr.* != self.reachable_color) {
-            ByteCode.deinit(entry.key_ptr.*, self.allocator);
-            self.bytecode.removeByPtr(entry.key_ptr);
-        }
-    }
-
     var strings_iter = self.strings.iterator();
     while (strings_iter.next()) |entry| {
         if (entry.value_ptr.* != self.reachable_color) {
             self.allocator.free(entry.key_ptr.*);
             self.strings.removeByPtr(entry.key_ptr);
+        }
+    }
+
+    var lists_iter = self.lists.iterator();
+    while (lists_iter.next()) |entry| {
+        if (entry.value_ptr.color != self.reachable_color) {
+            const lst = entry.key_ptr.*[0..entry.value_ptr.len];
+            self.allocator.free(lst);
+            self.lists.removeByPtr(entry.key_ptr);
+        }
+    }
+
+    var bytecode_iter = self.bytecode.iterator();
+    while (bytecode_iter.next()) |entry| {
+        if (entry.value_ptr.* != self.reachable_color) {
+            ByteCode.deinit(entry.key_ptr.*, self.allocator);
+            self.bytecode.removeByPtr(entry.key_ptr);
         }
     }
 

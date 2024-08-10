@@ -9,6 +9,7 @@ pub const Val = union(enum) {
     float: f64,
     string: []const u8,
     symbol: []const u8,
+    list: []Val,
     bytecode: *ByteCode,
     native_fn: NativeFn,
 
@@ -21,14 +22,7 @@ pub const Val = union(enum) {
         impl: *const fn (*Vm, []const Val) Error!Val,
     };
 
-    pub fn requiresHeap(self: Val) bool {
-        switch (self) {
-            .string => return true,
-            .symbol => return true,
-            .bytecode => return true,
-            else => return false,
-        }
-    }
+    pub const empty_list: Val = Val{ .list = &[0]Val{} };
 
     pub fn asBool(self: Val) !bool {
         switch (self) {

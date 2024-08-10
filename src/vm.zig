@@ -8,12 +8,6 @@ const builtins = @import("builtins.zig");
 
 const std = @import("std");
 
-pub const Options = struct {
-    initial_stack_capacity: usize = 4096 / @sizeOf(Val),
-    initial_frame_capacity: usize = 4096 / @sizeOf(Frame),
-    enable_builtins: bool = true,
-};
-
 const Frame = struct {
     bytecode: *ByteCode,
     instruction_idx: usize,
@@ -25,16 +19,17 @@ pub const Vm = struct {
     stack: std.ArrayListUnmanaged(Val),
     frames: std.ArrayListUnmanaged(Frame),
     symbols: std.StringHashMapUnmanaged(Val),
+    gc_duration_nanos: u64,
 
     /// Create a new virtual machine.
-    pub fn init(options: Options, allocator: std.mem.Allocator) !Vm {
+    pub fn init(allocator: std.mem.Allocator) !Vm {
         const stack = try std.ArrayListUnmanaged(Val).initCapacity(
             allocator,
-            options.initial_stack_capacity,
+            std.mem.page_size / @sizeOf(Val),
         );
         const frames = try std.ArrayListUnmanaged(Frame).initCapacity(
             allocator,
-            options.initial_stack_capacity,
+            std.mem.page_size / @sizeOf(Frame),
         );
         const symbols = std.StringHashMapUnmanaged(Val){};
         var vm = Vm{
@@ -42,10 +37,9 @@ pub const Vm = struct {
             .stack = stack,
             .frames = frames,
             .symbols = symbols,
+            .gc_duration_nanos = 0,
         };
-        if (options.enable_builtins) {
-            try builtins.registerAll(&vm);
-        }
+        try builtins.registerAll(&vm);
         return vm;
     }
 
@@ -65,6 +59,8 @@ pub const Vm = struct {
     /// Run the garbage collector to free up memory. This also keeps alive any values returned
     /// by values_iterator.
     pub fn runGcKeepAlive(self: *Vm, values_iterator: anytype) !void {
+        var timer = try std.time.Timer.start();
+        defer self.gc_duration_nanos += timer.read();
         for (self.stack.items) |v| try self.memory_manager.markVal(v);
         for (self.frames.items) |f| try self.memory_manager.markVal(.{ .bytecode = f.bytecode });
         while (values_iterator.next()) |v| try self.memory_manager.markVal(v);
@@ -169,7 +165,7 @@ pub const Vm = struct {
 };
 
 test "can eval basic expression" {
-    var vm = try Vm.init(.{}, std.testing.allocator);
+    var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
     const actual = try vm.evalStr("4");
     try vm.runGc();
@@ -177,7 +173,7 @@ test "can eval basic expression" {
 }
 
 test "can deref symbols" {
-    var vm = try Vm.init(.{}, std.testing.allocator);
+    var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
     try vm.defineVal("test", try vm.memory_manager.allocateStringVal("test-val"));
     const actual = try vm.evalStr("test");
@@ -185,7 +181,7 @@ test "can deref symbols" {
 }
 
 test "lambda can eval" {
-    var vm = try Vm.init(.{}, std.testing.allocator);
+    var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
     const actual = try vm.evalStr("((lambda (x) x) true)");
     try std.testing.expectEqualDeep(Val{ .boolean = true }, actual);
