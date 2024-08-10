@@ -1,0 +1,18 @@
+(define pi 3.14)
+(define circle-area
+  (lambda (radius)
+    (* pi radius radius)))
+(circle-area 100)
+(circle-area 100.0)
+
+(define lst (list 1 2 3 4))
+(first lst)
+(rest lst)
+(rest (rest lst))
+
+(define fib
+  (lambda (n)
+    (if (< n 2) n
+      (+ (fib (- n 1)) (fib (- n 2))))))
+
+(fib 35)

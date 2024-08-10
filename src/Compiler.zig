@@ -2,123 +2,87 @@ const ByteCode = @import("ByteCode.zig");
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
+const Compiler = @This();
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+memory_manager: *MemoryManager,
+
 /// Create a new ByteCode from the Ir.
-pub fn compile(memory_manager: *MemoryManager, ir: *const Ir) !Val {
+pub fn compile(self: *Compiler, ir: *const Ir) !Val {
     var irs = [1]*const Ir{ir};
-    const bc = try compileImpl(memory_manager, &irs);
+    const bc = try self.compileImpl(&irs);
     return .{ .bytecode = bc };
 }
 
-fn compileImpl(memory_manager: *MemoryManager, irs: []const *const Ir) Allocator.Error!*ByteCode {
-    var bc = try memory_manager.allocateByteCode();
-    const instruction_count = instructionCounts(irs);
-    try bc.instructions.ensureTotalCapacity(memory_manager.allocator, instruction_count);
-    for (irs) |ir| try addIr(bc, memory_manager, ir);
+fn compileImpl(self: *Compiler, irs: []const *const Ir) Allocator.Error!*ByteCode {
+    const bc = try self.memory_manager.allocateByteCode();
+    for (irs) |ir| try self.addIr(bc, ir);
     return bc;
 }
 
-inline fn instructionCounts(irs: []const *const Ir) usize {
-    var cnt: usize = 0;
-    for (irs) |ir| cnt += instructionCount(ir);
-    return cnt;
-}
-
-fn instructionCount(ir: *const Ir) usize {
-    switch (ir.*) {
-        .constant => return 1,
-        .deref => return 1,
-        .get_arg => return 1,
-        .function_call => |f| {
-            // 1 is for the eval instruction.
-            var cnt = 1 + instructionCount(f.function);
-            for (f.args) |arg| cnt += instructionCount(arg);
-            return cnt;
-        },
-        .if_expr => |expr| {
-            // 2 for a jump instruction in each the true and false branch.
-            var cnt = 2 + instructionCount(expr.predicate) + instructionCount(expr.true_expr);
-            if (expr.false_expr) |f| {
-                cnt += instructionCount(f);
-            } else {
-                cnt += 1;
-            }
-            return cnt;
-        },
-        .lambda => return 1,
-        .ret => |r| {
-            var cnt: usize = 1;
-            for (r.exprs) |e| cnt += instructionCount(e);
-            return cnt;
-        },
-    }
-}
-
-fn addIr(bc: *ByteCode, memory_manager: *MemoryManager, ir: *const Ir) Allocator.Error!void {
+fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
     switch (ir.*) {
         .constant => |c| {
             try bc.instructions.append(
-                memory_manager.allocator,
-                .{ .push_const = try c.toVal(memory_manager) },
+                self.memory_manager.allocator,
+                .{ .push_const = try c.toVal(self.memory_manager) },
             );
         },
         .deref => |s| {
             try bc.instructions.append(
-                memory_manager.allocator,
-                .{ .deref = try memory_manager.allocator.dupe(u8, s) },
+                self.memory_manager.allocator,
+                .{ .deref = try self.memory_manager.allocator.dupe(u8, s) },
             );
         },
         .get_arg => |n| {
             try bc.instructions.append(
-                memory_manager.allocator,
+                self.memory_manager.allocator,
                 .{ .get_arg = n },
             );
         },
         .function_call => |f| {
-            try addIr(bc, memory_manager, f.function);
-            for (f.args) |arg| try addIr(bc, memory_manager, arg);
+            try self.addIr(bc, f.function);
+            for (f.args) |arg| try self.addIr(bc, arg);
             try bc.instructions.append(
-                memory_manager.allocator,
+                self.memory_manager.allocator,
                 .{ .eval = f.args.len + 1 },
             );
         },
         .if_expr => |expr| {
-            try addIr(bc, memory_manager, expr.predicate);
-            var true_bc = try compileImpl(memory_manager, (&expr.true_expr)[0..1]);
+            try self.addIr(bc, expr.predicate);
+            var true_bc = try self.compileImpl((&expr.true_expr)[0..1]);
             var false_bc = if (expr.false_expr) |f|
-                try compileImpl(
-                    memory_manager,
+                try self.compileImpl(
                     (&f)[0..1],
                 )
             else
-                try compileImpl(memory_manager, &[_]*const Ir{&Ir{ .constant = .none }});
+                try self.compileImpl(&[_]*const Ir{&Ir{ .constant = .none }});
             try bc.instructions.append(
-                memory_manager.allocator,
+                self.memory_manager.allocator,
                 .{ .jump_if = false_bc.instructions.items.len + 1 },
             );
-            try bc.instructions.appendSlice(memory_manager.allocator, false_bc.instructions.items);
+            try bc.instructions.appendSlice(self.memory_manager.allocator, false_bc.instructions.items);
             false_bc.instructions.items.len = 0;
             try bc.instructions.append(
-                memory_manager.allocator,
+                self.memory_manager.allocator,
                 .{ .jump = true_bc.instructions.items.len },
             );
-            try bc.instructions.appendSlice(memory_manager.allocator, true_bc.instructions.items);
+            try bc.instructions.appendSlice(self.memory_manager.allocator, true_bc.instructions.items);
             true_bc.instructions.items.len = 0;
         },
         .lambda => |l| {
-            const lambda_bc = try compileImpl(memory_manager, l.exprs);
-            try lambda_bc.instructions.append(memory_manager.allocator, .ret);
+            const lambda_bc = try self.compileImpl(l.exprs);
+            try lambda_bc.instructions.append(self.memory_manager.allocator, .ret);
             try bc.instructions.append(
-                memory_manager.allocator,
+                self.memory_manager.allocator,
                 .{ .push_const = .{ .bytecode = lambda_bc } },
             );
         },
         .ret => |r| {
-            for (r.exprs) |e| try addIr(bc, memory_manager, e);
-            try bc.instructions.append(memory_manager.allocator, .ret);
+            for (r.exprs) |e| try self.addIr(bc, e);
+            try bc.instructions.append(self.memory_manager.allocator, .ret);
         },
     }
 }
@@ -133,7 +97,8 @@ test "if expression" {
     };
     var memory_manager = MemoryManager.init(std.testing.allocator);
     defer memory_manager.deinit();
-    const actual = try compile(&memory_manager, &ir);
+    var compiler = Compiler{ .memory_manager = &memory_manager };
+    const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
@@ -160,7 +125,8 @@ test "if expression without false branch returns none" {
     };
     var memory_manager = MemoryManager.init(std.testing.allocator);
     defer memory_manager.deinit();
-    const actual = try compile(&memory_manager, &ir);
+    var compiler = Compiler{ .memory_manager = &memory_manager };
+    const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){

@@ -3,7 +3,7 @@ const ByteCode = @import("ByteCode.zig");
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const iter = @import("iter.zig");
-const compile = @import("compiler.zig").compile;
+const Compiler = @import("Compiler.zig");
 const builtins = @import("builtins.zig");
 
 const std = @import("std");
@@ -31,12 +31,11 @@ pub const Vm = struct {
             allocator,
             std.mem.page_size / @sizeOf(Frame),
         );
-        const symbols = std.StringHashMapUnmanaged(Val){};
         var vm = Vm{
             .memory_manager = MemoryManager.init(allocator),
             .stack = stack,
             .frames = frames,
-            .symbols = symbols,
+            .symbols = .{},
             .gc_duration_nanos = 0,
         };
         try builtins.registerAll(&vm);
@@ -89,7 +88,8 @@ pub const Vm = struct {
         var arena = std.heap.ArenaAllocator.init(self.memory_manager.allocator);
         defer arena.deinit();
         const ir = try Ir.initStrExpr(arena.allocator(), expr);
-        const bc = try compile(&self.memory_manager, ir);
+        var compiler = Compiler{ .memory_manager = &self.memory_manager };
+        const bc = try compiler.compile(ir);
         return self.eval(bc);
     }
 

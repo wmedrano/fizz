@@ -12,6 +12,8 @@ pub fn registerAll(vm: anytype) !void {
     try vm.defineVal("-", .{ .native_fn = .{ .impl = subtract } });
     try vm.defineVal("*", .{ .native_fn = .{ .impl = multiply } });
     try vm.defineVal("/", .{ .native_fn = .{ .impl = divide } });
+    try vm.defineVal("<", .{ .native_fn = .{ .impl = less } });
+    try vm.defineVal(">", .{ .native_fn = .{ .impl = greater } });
 }
 
 fn define(vm: *Vm, vals: []const Val) Error!Val {
@@ -143,4 +145,54 @@ fn divide(vm: *Vm, vals: []const Val) Error!Val {
             });
         },
     }
+}
+
+fn less_impl(vals: []const Val) Error!bool {
+    if (vals.len > 1) {
+        for (vals[0 .. vals.len - 1], vals[1..]) |a, b| {
+            switch (a) {
+                .int => |i| switch (b) {
+                    .int => |other| if (i >= other) return false,
+                    .float => |other| if (@as(f64, @floatFromInt(i)) >= other) return false,
+                    else => return Error.TypeError,
+                },
+                .float => |f| switch (b) {
+                    .int => |other| if (f >= @as(f64, @floatFromInt(other))) return false,
+                    .float => |other| if (f >= other) return false,
+                    else => return Error.TypeError,
+                },
+                else => return Error.TypeError,
+            }
+        }
+    }
+    return true;
+}
+
+fn less(_: *Vm, vals: []const Val) Error!Val {
+    return .{ .boolean = try less_impl(vals) };
+}
+
+fn greater_impl(vals: []const Val) Error!bool {
+    if (vals.len > 1) {
+        for (vals[0 .. vals.len - 1], vals[1..]) |a, b| {
+            switch (a) {
+                .int => |i| switch (b) {
+                    .int => |other| if (i <= other) return false,
+                    .float => |other| if (@as(f64, @floatFromInt(i)) <= other) return false,
+                    else => return Error.TypeError,
+                },
+                .float => |f| switch (b) {
+                    .int => |other| if (f <= @as(f64, @floatFromInt(other))) return false,
+                    .float => |other| if (f <= other) return false,
+                    else => return Error.TypeError,
+                },
+                else => return Error.TypeError,
+            }
+        }
+    }
+    return true;
+}
+
+fn greater(_: *Vm, vals: []const Val) Error!Val {
+    return .{ .boolean = try greater_impl(vals) };
 }
