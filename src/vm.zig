@@ -81,6 +81,11 @@ pub const Vm = struct {
         return self.symbols.put(self.memory_manager.allocator, interned_sym, val);
     }
 
+    /// Get the defined value or null if it is not bound.
+    pub fn getVal(self: *const Vm, sym: []const u8) ?Val {
+        return self.symbols.get(sym);
+    }
+
     /// Evaluate a single expression from the string.
     ///
     /// Note: Val is only valid until the next garbage collection call.
@@ -88,7 +93,7 @@ pub const Vm = struct {
         var arena = std.heap.ArenaAllocator.init(self.memory_manager.allocator);
         defer arena.deinit();
         const ir = try Ir.initStrExpr(arena.allocator(), expr);
-        var compiler = Compiler{ .memory_manager = &self.memory_manager };
+        var compiler = Compiler{ .vm = self };
         const bc = try compiler.compile(ir);
         return self.eval(bc);
     }
@@ -131,7 +136,7 @@ pub const Vm = struct {
         return true;
     }
 
-    fn executeRet(self: *Vm) !bool {
+    inline fn executeRet(self: *Vm) !bool {
         const old_frame = self.frames.pop();
         if (self.frames.items.len == 0) {
             return false;
@@ -142,7 +147,7 @@ pub const Vm = struct {
         return true;
     }
 
-    fn executeEval(self: *Vm, n: usize) !void {
+    inline fn executeEval(self: *Vm, n: usize) !void {
         const fn_idx = self.stack.items.len - n;
         const func = self.stack.items[fn_idx];
         const stack_start = fn_idx + 1;

@@ -8,6 +8,11 @@ const MemoryManager = @import("MemoryManager.zig");
 pub const Ir = union(enum) {
     /// A single constant value.
     constant: Const,
+    /// A define statement.
+    define: struct {
+        name: []const u8,
+        expr: *Ir,
+    },
     /// Dereference an identifier.
     deref: []const u8,
     /// Get the nth element from the function call stack.
@@ -28,6 +33,7 @@ pub const Ir = union(enum) {
         /// The block to return on false or null if Val.void should be returned.
         false_expr: ?*Ir,
     },
+    /// Defines a lambda.
     lambda: struct {
         name: []const u8,
         exprs: []*Ir,
@@ -90,6 +96,7 @@ pub const Ir = union(enum) {
     pub fn deinit(self: *Ir, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .constant => {},
+            .define => |def| def.expr.deinit(allocator),
             .deref => {},
             .get_arg => {},
             .function_call => |*f| {
@@ -117,6 +124,7 @@ pub const Ir = union(enum) {
     pub fn format(self: *const Ir, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         switch (self.*) {
             .constant => |c| try writer.print("constant({any}) ", .{c}),
+            .define => |d| try writer.print("define({s}, {any}) ", .{ d.name, d.expr }),
             .deref => |d| try writer.print("deref({s}) ", .{d}),
             .get_arg => |a| try writer.print("get_arg({d}) ", .{a}),
             .function_call => |f| try writer.print("funcall({any}, {any}) ", .{ f.function, f.args }),
@@ -220,20 +228,14 @@ const IrBuilder = struct {
                 else => return Error.SyntaxError,
             },
         };
-        const sym_const = .{ .symbol = name };
-        const args = try self.allocator.alloc(*Ir, 2);
-        errdefer self.allocator.free(args);
-        args[0] = try self.allocator.create(Ir);
-        errdefer args[0].deinit(self.allocator);
-        args[0].* = .{ .constant = sym_const };
-        args[1] = try self.build(name, def);
-        errdefer args[1].deinit(self.allocator);
+        var expr = try self.build(name, def);
+        errdefer expr.deinit(self.allocator);
         const ret = try self.allocator.create(Ir);
         errdefer ret.deinit(self.allocator);
         ret.* = .{
-            .function_call = .{
-                .function = try self.buildDeref("%define"),
-                .args = args,
+            .define = .{
+                .name = name,
+                .expr = expr,
             },
         };
         return ret;
@@ -360,12 +362,9 @@ test "parse define statement" {
         .ret = .{
             .exprs = @constCast(&[_]*Ir{
                 @constCast(&Ir{
-                    .function_call = .{
-                        .function = @constCast(&Ir{ .deref = "%define" }),
-                        .args = @constCast(&[_]*Ir{
-                            @constCast(&Ir{ .constant = .{ .symbol = @constCast("x") } }),
-                            @constCast(&Ir{ .constant = .{ .int = 12 } }),
-                        }),
+                    .define = .{
+                        .name = "x",
+                        .expr = @constCast(&Ir{ .constant = .{ .int = 12 } }),
                     },
                 }),
             }),
@@ -464,27 +463,21 @@ test "define on lambda produces named function" {
         .ret = .{
             .exprs = @constCast(&[_]*Ir{
                 @constCast(&Ir{
-                    .function_call = .{
-                        .function = @constCast(&Ir{ .deref = "%define" }),
-                        .args = @constCast(&[_]*Ir{
-                            @constCast(&Ir{ .constant = .{ .symbol = @constCast("foo") } }),
-                            @constCast(&Ir{
-                                .lambda = .{
-                                    .name = "foo",
-                                    .exprs = @constCast(&[_]*Ir{
-                                        @constCast(&Ir{
-                                            .lambda = .{
-                                                .name = "_",
-                                                .exprs = @constCast(&[_]*Ir{
-                                                    @constCast(&Ir{ .constant = .{ .int = 10 } }),
-                                                }),
-                                            },
+                    .define = .{ .name = "foo", .expr = @constCast(&Ir{
+                        .lambda = .{
+                            .name = "foo",
+                            .exprs = @constCast(&[_]*Ir{
+                                @constCast(&Ir{
+                                    .lambda = .{
+                                        .name = "_",
+                                        .exprs = @constCast(&[_]*Ir{
+                                            @constCast(&Ir{ .constant = .{ .int = 10 } }),
                                         }),
-                                    }),
-                                },
+                                    },
+                                }),
                             }),
-                        }),
-                    },
+                        },
+                    }) },
                 }),
             }),
         },

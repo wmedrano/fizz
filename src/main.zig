@@ -2,10 +2,10 @@ const std = @import("std");
 const Ast = @import("Ast.zig");
 const Vm = @import("vm.zig").Vm;
 const Ir = @import("ir.zig").Ir;
-const compile = @import("compiler.zig").compile;
+const Compiler = @import("Compiler.zig");
 
 pub fn main() !void {
-    const input = try std.fs.cwd().readFileAlloc(std.heap.page_allocator, "/dev/stdin", 1024 * 1024);
+    const input = try std.fs.cwd().readFileAlloc(std.heap.page_allocator, "main.fizz", 1024 * 1024);
     defer std.heap.page_allocator.free(input);
     try runScript(input);
 }
@@ -22,8 +22,9 @@ fn runScript(script_contents: []const u8) !void {
     var ir_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer ir_arena.deinit();
     for (1..ast.asts.len + 1, ast.asts) |idx, node| {
+        var compiler = Compiler{ .vm = &vm };
         const ir = try Ir.init(ir_arena.allocator(), &node);
-        const bytecode = try compile(&vm.memory_manager, ir);
+        const bytecode = try compiler.compile(ir);
         const res = try vm.eval(bytecode);
         std.debug.print("${d}: {any}\n", .{ idx, res });
         _ = ir_arena.reset(.retain_capacity);

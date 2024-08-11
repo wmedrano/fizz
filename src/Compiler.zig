@@ -3,11 +3,12 @@ const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
 const Compiler = @This();
+const Vm = @import("vm.zig").Vm;
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-memory_manager: *MemoryManager,
+vm: *Vm,
 
 /// Create a new ByteCode from the Ir.
 pub fn compile(self: *Compiler, ir: *const Ir) !Val {
@@ -17,7 +18,7 @@ pub fn compile(self: *Compiler, ir: *const Ir) !Val {
 }
 
 fn compileImpl(self: *Compiler, irs: []const *const Ir) Allocator.Error!*ByteCode {
-    const bc = try self.memory_manager.allocateByteCode();
+    const bc = try self.vm.memory_manager.allocateByteCode();
     for (irs) |ir| try self.addIr(bc, ir);
     return bc;
 }
@@ -26,19 +27,34 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
     switch (ir.*) {
         .constant => |c| {
             try bc.instructions.append(
-                self.memory_manager.allocator,
-                .{ .push_const = try c.toVal(self.memory_manager) },
+                self.vm.memory_manager.allocator,
+                .{ .push_const = try c.toVal(&self.vm.memory_manager) },
+            );
+        },
+        .define => |def| {
+            try bc.instructions.append(
+                self.vm.memory_manager.allocator,
+                .{ .push_const = self.vm.getVal("%define") orelse @panic("builtin %define not available") },
+            );
+            try bc.instructions.append(
+                self.vm.memory_manager.allocator,
+                .{ .push_const = try self.vm.memory_manager.allocateSymbolVal(def.name) },
+            );
+            try self.addIr(bc, def.expr);
+            try bc.instructions.append(
+                self.vm.memory_manager.allocator,
+                .{ .eval = 3 },
             );
         },
         .deref => |s| {
             try bc.instructions.append(
-                self.memory_manager.allocator,
-                .{ .deref = try self.memory_manager.allocator.dupe(u8, s) },
+                self.vm.memory_manager.allocator,
+                .{ .deref = try self.vm.memory_manager.allocator.dupe(u8, s) },
             );
         },
         .get_arg => |n| {
             try bc.instructions.append(
-                self.memory_manager.allocator,
+                self.vm.memory_manager.allocator,
                 .{ .get_arg = n },
             );
         },
@@ -46,7 +62,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
             try self.addIr(bc, f.function);
             for (f.args) |arg| try self.addIr(bc, arg);
             try bc.instructions.append(
-                self.memory_manager.allocator,
+                self.vm.memory_manager.allocator,
                 .{ .eval = f.args.len + 1 },
             );
         },
@@ -60,29 +76,29 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
             else
                 try self.compileImpl(&[_]*const Ir{&Ir{ .constant = .none }});
             try bc.instructions.append(
-                self.memory_manager.allocator,
+                self.vm.memory_manager.allocator,
                 .{ .jump_if = false_bc.instructions.items.len + 1 },
             );
-            try bc.instructions.appendSlice(self.memory_manager.allocator, false_bc.instructions.items);
+            try bc.instructions.appendSlice(self.vm.memory_manager.allocator, false_bc.instructions.items);
             false_bc.instructions.items.len = 0;
             try bc.instructions.append(
-                self.memory_manager.allocator,
+                self.vm.memory_manager.allocator,
                 .{ .jump = true_bc.instructions.items.len },
             );
-            try bc.instructions.appendSlice(self.memory_manager.allocator, true_bc.instructions.items);
+            try bc.instructions.appendSlice(self.vm.memory_manager.allocator, true_bc.instructions.items);
             true_bc.instructions.items.len = 0;
         },
         .lambda => |l| {
             const lambda_bc = try self.compileImpl(l.exprs);
-            try lambda_bc.instructions.append(self.memory_manager.allocator, .ret);
+            try lambda_bc.instructions.append(self.vm.memory_manager.allocator, .ret);
             try bc.instructions.append(
-                self.memory_manager.allocator,
+                self.vm.memory_manager.allocator,
                 .{ .push_const = .{ .bytecode = lambda_bc } },
             );
         },
         .ret => |r| {
             for (r.exprs) |e| try self.addIr(bc, e);
-            try bc.instructions.append(self.memory_manager.allocator, .ret);
+            try bc.instructions.append(self.vm.memory_manager.allocator, .ret);
         },
     }
 }
@@ -95,9 +111,9 @@ test "if expression" {
             .false_expr = @constCast(&Ir{ .constant = .{ .int = 2 } }),
         },
     };
-    var memory_manager = MemoryManager.init(std.testing.allocator);
-    defer memory_manager.deinit();
-    var compiler = Compiler{ .memory_manager = &memory_manager };
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var compiler = Compiler{ .vm = &vm };
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
@@ -123,9 +139,9 @@ test "if expression without false branch returns none" {
             .false_expr = null,
         },
     };
-    var memory_manager = MemoryManager.init(std.testing.allocator);
-    defer memory_manager.deinit();
-    var compiler = Compiler{ .memory_manager = &memory_manager };
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var compiler = Compiler{ .vm = &vm };
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
