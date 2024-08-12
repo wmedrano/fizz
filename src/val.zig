@@ -15,6 +15,7 @@ pub const Val = union(enum) {
 
     pub const NativeFn = struct {
         pub const Error = error{
+            ArrityError,
             TypeError,
             RuntimeError,
         };

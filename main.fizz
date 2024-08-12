@@ -15,4 +15,5 @@
     (if (< n 2) n
       (+ (fib (- n 1)) (fib (- n 2))))))
 
-(fib 20)
+(fib 24)
+(apply fib (list 24))

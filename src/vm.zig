@@ -12,6 +12,7 @@ const Frame = struct {
     bytecode: *ByteCode,
     instruction_idx: usize,
     stack_start: usize,
+    ffi_boundary: bool,
 };
 
 pub const Vm = struct {
@@ -105,58 +106,64 @@ pub const Vm = struct {
     pub fn eval(self: *Vm, func: Val) !Val {
         const bc = try func.asByteCode();
         self.stack.clearRetainingCapacity();
-        const frame = .{ .bytecode = bc, .instruction_idx = 0, .stack_start = 0 };
+        const frame = .{
+            .bytecode = bc,
+            .instruction_idx = 0,
+            .stack_start = 0,
+            .ffi_boundary = true,
+        };
         self.frames.appendAssumeCapacity(frame);
         while (try self.runNext()) {}
         return self.stack.popOrNull() orelse .none;
     }
 
     fn runNext(self: *Vm) !bool {
-        if (self.frames.items.len == 0) return false;
         var frame = &self.frames.items[self.frames.items.len - 1];
         const instruction = frame.bytecode.instructions.items[frame.instruction_idx];
         switch (instruction) {
-            .push_const => |v| try self.stack.append(self.memory_manager.allocator, v),
-            .deref => |s| {
-                const v = self.symbols.get(s) orelse return error.SymbolNotFound;
-                try self.stack.append(self.memory_manager.allocator, v);
-            },
-            .get_arg => |idx| {
-                const v = self.stack.items[frame.stack_start + idx];
-                try self.stack.append(self.memory_manager.allocator, v);
-            },
-            .eval => |n| try self.executeEval(n),
+            .push_const => |v| try self.executePushConst(v),
+            .deref => |s| try self.executeDeref(s),
+            .get_arg => |idx| try self.executeGetArg(frame, idx),
+            .eval => |n| try self.executeEval(frame, n),
             .jump => |n| frame.instruction_idx += n,
             .jump_if => |n| if (try self.stack.pop().asBool()) {
                 frame.instruction_idx += n;
             },
+            .unwrap_list => try self.executeUnwrapList(),
             .ret => if (!try self.executeRet()) return false,
         }
         frame.instruction_idx += 1;
         return true;
     }
 
-    inline fn executeRet(self: *Vm) !bool {
-        const old_frame = self.frames.pop();
-        if (self.frames.items.len == 0) {
-            return false;
-        }
-        const ret = self.stack.pop();
-        self.stack.items = self.stack.items[0..old_frame.stack_start];
-        self.stack.items[old_frame.stack_start - 1] = ret;
-        return true;
+    fn executePushConst(self: *Vm, v: Val) !void {
+        try self.stack.append(self.memory_manager.allocator, v);
     }
 
-    inline fn executeEval(self: *Vm, n: usize) !void {
-        const fn_idx = self.stack.items.len - n;
+    fn executeDeref(self: *Vm, sym: []const u8) !void {
+        const v = self.symbols.get(sym) orelse return error.SymbolNotFound;
+        try self.stack.append(self.memory_manager.allocator, v);
+    }
+
+    fn executeGetArg(self: *Vm, frame: *const Frame, idx: usize) !void {
+        const v = self.stack.items[frame.stack_start + idx];
+        try self.stack.append(self.memory_manager.allocator, v);
+    }
+
+    fn executeEval(self: *Vm, frame: *const Frame, n: usize) !void {
+        const norm_n: usize = if (n == 0) self.stack.items.len - frame.stack_start else n;
+        const arg_count = norm_n - 1;
+        const fn_idx = self.stack.items.len - norm_n;
         const func = self.stack.items[fn_idx];
         const stack_start = fn_idx + 1;
         switch (func) {
             .bytecode => |bc| {
+                if (bc.arg_count != arg_count) return error.ArrityError;
                 const new_frame = .{
                     .bytecode = bc,
                     .instruction_idx = 0,
                     .stack_start = stack_start,
+                    .ffi_boundary = false,
                 };
                 self.frames.appendAssumeCapacity(new_frame);
             },
@@ -166,6 +173,25 @@ pub const Vm = struct {
             },
             else => return error.TypeError,
         }
+    }
+
+    fn executeUnwrapList(self: *Vm) !void {
+        const v = self.stack.pop();
+        switch (v) {
+            .list => |lst| try self.stack.appendSlice(self.memory_manager.allocator, lst),
+            else => return error.TypeError,
+        }
+    }
+
+    fn executeRet(self: *Vm) !bool {
+        const old_frame = self.frames.pop();
+        if (self.frames.items.len == 0 or old_frame.ffi_boundary) {
+            return false;
+        }
+        const ret = self.stack.popOrNull() orelse .none;
+        self.stack.items = self.stack.items[0..old_frame.stack_start];
+        self.stack.items[old_frame.stack_start - 1] = ret;
+        return true;
     }
 };
 

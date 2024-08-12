@@ -78,6 +78,7 @@ pub fn allocateByteCode(self: *MemoryManager) !*ByteCode {
     const bc = try self.allocator.create(ByteCode);
     try self.bytecode.put(self.allocator, bc, self.reachable_color);
     bc.* = ByteCode{
+        .arg_count = 0,
         .instructions = .{},
     };
     return bc;
@@ -145,8 +146,10 @@ test "no memory leaks" {
     try memory_manager.markVal(.none);
     try memory_manager.sweep();
     try std.testing.expectEqualStrings("hello world", try memory_manager.allocateString("hello world"));
-    try std.testing.expectError(
-        error.TestExpectedEqual,
-        std.testing.expectEqual("different pointers", try memory_manager.allocateString("different pointers")),
+
+    const test_str = "different pointers";
+    try std.testing.expect(
+        test_str.ptr !=
+            (try memory_manager.allocateString(test_str)).ptr,
     );
 }

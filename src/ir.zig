@@ -15,8 +15,6 @@ pub const Ir = union(enum) {
     },
     /// Dereference an identifier.
     deref: []const u8,
-    /// Get the nth element from the function call stack.
-    get_arg: usize,
     /// A function call.
     function_call: struct {
         /// The function to call.
@@ -36,6 +34,7 @@ pub const Ir = union(enum) {
     /// Defines a lambda.
     lambda: struct {
         name: []const u8,
+        args: [][]const u8,
         exprs: []*Ir,
     },
     ret: struct {
@@ -98,7 +97,6 @@ pub const Ir = union(enum) {
             .constant => {},
             .define => |def| def.expr.deinit(allocator),
             .deref => {},
-            .get_arg => {},
             .function_call => |*f| {
                 f.function.deinit(allocator);
                 for (f.args) |a| a.deinit(allocator);
@@ -110,6 +108,7 @@ pub const Ir = union(enum) {
                 if (expr.false_expr) |e| e.deinit(allocator);
             },
             .lambda => |l| {
+                allocator.free(l.args);
                 for (l.exprs) |e| e.deinit(allocator);
                 allocator.free(l.exprs);
             },
@@ -126,7 +125,6 @@ pub const Ir = union(enum) {
             .constant => |c| try writer.print("constant({any}) ", .{c}),
             .define => |d| try writer.print("define({s}, {any}) ", .{ d.name, d.expr }),
             .deref => |d| try writer.print("deref({s}) ", .{d}),
-            .get_arg => |a| try writer.print("get_arg({d}) ", .{a}),
             .function_call => |f| try writer.print("funcall({any}, {any}) ", .{ f.function, f.args }),
             .if_expr => |e| try writer.print("if({any}, {any}, {any}) ", .{ e.predicate, e.true_expr, e.false_expr }),
             .lambda => |l| try writer.print("lambda({any}) ", .{l.exprs}),
@@ -212,11 +210,7 @@ const IrBuilder = struct {
     fn buildDeref(self: *IrBuilder, symbol: []const u8) Error!*Ir {
         const ret = try self.allocator.create(Ir);
         errdefer ret.deinit(self.allocator);
-        if (self.arg_to_idx.get(symbol)) |idx| {
-            ret.* = .{ .get_arg = idx };
-        } else {
-            ret.* = .{ .deref = symbol };
-        }
+        ret.* = .{ .deref = symbol };
         return ret;
     }
 
@@ -314,8 +308,11 @@ const IrBuilder = struct {
         const ret = try self.allocator.create(Ir);
         ret.* = .{ .lambda = .{
             .name = name,
+            .args = try self.allocator.alloc([]const u8, lambda_builder.arg_to_idx.size),
             .exprs = exprs,
         } };
+        var args_iter = lambda_builder.arg_to_idx.iterator();
+        while (args_iter.next()) |entry| ret.lambda.args[entry.value_ptr.*] = entry.key_ptr.*;
         return ret;
     }
 };
@@ -415,13 +412,14 @@ test "parse lambda" {
                 @constCast(&Ir{
                     .lambda = .{
                         .name = "_",
+                        .args = @constCast(&[_][]const u8{ "a", "b" }),
                         .exprs = @constCast(&[_]*Ir{
                             @constCast(&Ir{
                                 .function_call = .{
                                     .function = @constCast(&Ir{ .deref = "+" }),
                                     .args = @constCast(&[_]*Ir{
-                                        @constCast(&Ir{ .get_arg = 0 }),
-                                        @constCast(&Ir{ .get_arg = 1 }),
+                                        @constCast(&Ir{ .deref = "a" }),
+                                        @constCast(&Ir{ .deref = "b" }),
                                     }),
                                 },
                             }),
@@ -429,8 +427,8 @@ test "parse lambda" {
                                 .function_call = .{
                                     .function = @constCast(&Ir{ .deref = "-" }),
                                     .args = @constCast(&[_]*Ir{
-                                        @constCast(&Ir{ .get_arg = 0 }),
-                                        @constCast(&Ir{ .get_arg = 1 }),
+                                        @constCast(&Ir{ .deref = "a" }),
+                                        @constCast(&Ir{ .deref = "b" }),
                                     }),
                                 },
                             }),
@@ -466,10 +464,12 @@ test "define on lambda produces named function" {
                     .define = .{ .name = "foo", .expr = @constCast(&Ir{
                         .lambda = .{
                             .name = "foo",
+                            .args = &.{},
                             .exprs = @constCast(&[_]*Ir{
                                 @constCast(&Ir{
                                     .lambda = .{
                                         .name = "_",
+                                        .args = &.{},
                                         .exprs = @constCast(&[_]*Ir{
                                             @constCast(&Ir{ .constant = .{ .int = 10 } }),
                                         }),

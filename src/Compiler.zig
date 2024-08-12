@@ -8,7 +8,10 @@ const Vm = @import("vm.zig").Vm;
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// The virtual machine to compile for.
 vm: *Vm,
+/// The arguments that are in scope.
+args: [][]const u8 = &.{},
 
 /// Create a new ByteCode from the Ir.
 pub fn compile(self: *Compiler, ir: *const Ir) !Val {
@@ -19,8 +22,16 @@ pub fn compile(self: *Compiler, ir: *const Ir) !Val {
 
 fn compileImpl(self: *Compiler, irs: []const *const Ir) Allocator.Error!*ByteCode {
     const bc = try self.vm.memory_manager.allocateByteCode();
+    bc.arg_count = self.args.len;
     for (irs) |ir| try self.addIr(bc, ir);
     return bc;
+}
+
+fn argIdx(self: *const Compiler, arg_name: []const u8) ?usize {
+    for (0..self.args.len, self.args) |idx, arg| {
+        if (std.mem.eql(u8, arg_name, arg)) return idx;
+    }
+    return null;
 }
 
 fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
@@ -47,16 +58,14 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
             );
         },
         .deref => |s| {
-            try bc.instructions.append(
-                self.vm.memory_manager.allocator,
-                .{ .deref = try self.vm.memory_manager.allocator.dupe(u8, s) },
-            );
-        },
-        .get_arg => |n| {
-            try bc.instructions.append(
-                self.vm.memory_manager.allocator,
-                .{ .get_arg = n },
-            );
+            if (self.argIdx(s)) |arg_idx| {
+                try bc.instructions.append(self.vm.memory_manager.allocator, .{ .get_arg = arg_idx });
+            } else {
+                try bc.instructions.append(
+                    self.vm.memory_manager.allocator,
+                    .{ .deref = try self.vm.memory_manager.allocator.dupe(u8, s) },
+                );
+            }
         },
         .function_call => |f| {
             try self.addIr(bc, f.function);
@@ -89,6 +98,9 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
             true_bc.instructions.items.len = 0;
         },
         .lambda => |l| {
+            const old_args = self.args;
+            defer self.args = old_args;
+            self.args = l.args;
             const lambda_bc = try self.compileImpl(l.exprs);
             try lambda_bc.instructions.append(self.vm.memory_manager.allocator, .ret);
             try bc.instructions.append(
@@ -117,6 +129,7 @@ test "if expression" {
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
+            .arg_count = 0,
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{
                     .{ .push_const = .{ .boolean = true } },
@@ -145,6 +158,7 @@ test "if expression without false branch returns none" {
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
+            .arg_count = 0,
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{
                     .{ .push_const = .{ .boolean = true } },

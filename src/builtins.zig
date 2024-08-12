@@ -1,8 +1,10 @@
 const Val = @import("val.zig").Val;
 const Vm = @import("vm.zig").Vm;
+const ByteCode = @import("ByteCode.zig");
 const Error = Val.NativeFn.Error;
+const std = @import("std");
 
-pub fn registerAll(vm: anytype) !void {
+pub fn registerAll(vm: *Vm) !void {
     try vm.defineVal("%define", .{ .native_fn = .{ .impl = define } });
     try vm.defineVal("list", .{ .native_fn = .{ .impl = list } });
     try vm.defineVal("first", .{ .native_fn = .{ .impl = first } });
@@ -14,10 +16,23 @@ pub fn registerAll(vm: anytype) !void {
     try vm.defineVal("/", .{ .native_fn = .{ .impl = divide } });
     try vm.defineVal("<", .{ .native_fn = .{ .impl = less } });
     try vm.defineVal(">", .{ .native_fn = .{ .impl = greater } });
+
+    var apply_bytecode = try vm.memory_manager.allocateByteCode();
+    apply_bytecode.arg_count = 2;
+    try apply_bytecode.instructions.appendSlice(
+        vm.memory_manager.allocator,
+        &[_]ByteCode.Instruction{ .unwrap_list, .{ .eval = 0 }, .ret },
+    );
+    try vm.defineVal(
+        "apply",
+        .{
+            .bytecode = apply_bytecode,
+        },
+    );
 }
 
 fn define(vm: *Vm, vals: []const Val) Error!Val {
-    if (vals.len != 2) return Error.RuntimeError;
+    if (vals.len != 2) return Error.ArrityError;
     switch (vals[0]) {
         .symbol => |s| {
             vm.defineVal(s, vals[1]) catch return Error.RuntimeError;
@@ -35,7 +50,7 @@ fn list(vm: *Vm, vals: []const Val) Error!Val {
 }
 
 fn first(_: *Vm, vals: []const Val) Error!Val {
-    if (vals.len != 1) return Error.RuntimeError;
+    if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => |lst| return lst[0],
         else => return Error.TypeError,
@@ -43,7 +58,7 @@ fn first(_: *Vm, vals: []const Val) Error!Val {
 }
 
 fn rest(vm: *Vm, vals: []const Val) Error!Val {
-    if (vals.len != 1) return Error.RuntimeError;
+    if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => |lst| {
             if (lst.len == 0) return Error.RuntimeError;
@@ -54,12 +69,12 @@ fn rest(vm: *Vm, vals: []const Val) Error!Val {
             }
             return .{ .list = ret };
         },
-        else => return Error.RuntimeError,
+        else => return Error.TypeError,
     }
 }
 
 fn len(_: *Vm, vals: []const Val) Error!Val {
-    if (vals.len != 1) return Error.RuntimeError;
+    if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => |lst| return .{ .int = @intCast(lst.len) },
         else => return Error.TypeError,
@@ -96,7 +111,7 @@ fn negate(v: Val) Error!Val {
 
 fn subtract(vm: *Vm, vals: []const Val) Error!Val {
     switch (vals.len) {
-        0 => return error.RuntimeError,
+        0 => return error.ArrityError,
         1 => return try negate(vals[0]),
         else => {
             const neg = try negate(try add(vm, vals[1..]));
@@ -135,7 +150,7 @@ fn reciprocal(v: Val) Error!Val {
 
 fn divide(vm: *Vm, vals: []const Val) Error!Val {
     switch (vals.len) {
-        0 => return error.RuntimeError,
+        0 => return error.ArrityError,
         1 => return try reciprocal(vals[0]),
         else => {
             const divisor = try multiply(vm, vals[1..]);
@@ -195,4 +210,10 @@ fn greater_impl(vals: []const Val) Error!bool {
 
 fn greater(_: *Vm, vals: []const Val) Error!Val {
     return .{ .boolean = try greater_impl(vals) };
+}
+
+test "register_all does not fail" {
+    var vm = try Vm.init(std.testing.allocator);
+    try registerAll(&vm);
+    defer vm.deinit();
 }
