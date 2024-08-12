@@ -4,10 +4,9 @@ const ByteCode = @import("ByteCode.zig");
 const Error = Val.NativeFn.Error;
 const std = @import("std");
 
-const apply_bytecode_instructions = [_]ByteCode.Instruction{ .unwrap_list, .{ .eval = 0 }, .ret };
-
 pub fn registerAll(vm: *Vm) !void {
     try vm.global_module.setVal(vm, "%define", .{ .native_fn = .{ .impl = define } });
+    try vm.global_module.setVal(vm, "apply", .{ .native_fn = .{ .impl = apply } });
     try vm.global_module.setVal(vm, "list", .{ .native_fn = .{ .impl = list } });
     try vm.global_module.setVal(vm, "first", .{ .native_fn = .{ .impl = first } });
     try vm.global_module.setVal(vm, "rest", .{ .native_fn = .{ .impl = rest } });
@@ -18,20 +17,6 @@ pub fn registerAll(vm: *Vm) !void {
     try vm.global_module.setVal(vm, "/", .{ .native_fn = .{ .impl = divide } });
     try vm.global_module.setVal(vm, "<", .{ .native_fn = .{ .impl = less } });
     try vm.global_module.setVal(vm, ">", .{ .native_fn = .{ .impl = greater } });
-
-    const apply_bytecode = try vm.memory_manager.allocateByteCode();
-    apply_bytecode.* = .{
-        .name = try vm.memory_manager.allocator.dupe(u8, "apply"),
-        .arg_count = 2,
-        .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
-            .items = try vm.memory_manager.allocator.dupe(
-                ByteCode.Instruction,
-                &apply_bytecode_instructions,
-            ),
-            .capacity = apply_bytecode_instructions.len,
-        },
-    };
-    try vm.global_module.setVal(vm, "apply", .{ .bytecode = apply_bytecode });
 }
 
 fn define(vm: *Vm, vals: []const Val) Error!Val {
@@ -43,6 +28,21 @@ fn define(vm: *Vm, vals: []const Val) Error!Val {
         else => return Error.TypeError,
     }
     return .none;
+}
+
+fn apply(vm: *Vm, vals: []const Val) Error!Val {
+    if (vals.len != 2) return Error.ArrityError;
+    const args = switch (vals[1]) {
+        .list => |lst| lst,
+        else => return Error.TypeError,
+    };
+    const res = vm.eval(vals[0], args) catch |err| switch (err) {
+        Error.ArrityError => return Error.ArrityError,
+        Error.RuntimeError => return Error.RuntimeError,
+        Error.TypeError => return Error.TypeError,
+        else => return Error.RuntimeError,
+    };
+    return res;
 }
 
 fn list(vm: *Vm, vals: []const Val) Error!Val {

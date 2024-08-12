@@ -7,23 +7,30 @@ const std = @import("std");
 
 values: std.StringHashMapUnmanaged(Val) = .{},
 
+/// Set a value within the module.
 pub fn setVal(self: *Module, vm: *Vm, sym: []const u8, v: Val) !void {
     const interned_sym = try vm.memory_manager.allocateString(sym);
     try self.values.put(vm.memory_manager.allocator, interned_sym, v);
 }
 
+/// Get a value within the module.
 pub fn getVal(self: *const Module, sym: []const u8) ?Val {
     return self.values.get(sym);
 }
 
+/// Deinitialize the module.
 pub fn deinit(self: *Module, vm: *Vm) void {
     self.values.deinit(vm.memory_manager.allocator);
 }
 
+/// An iterator over values referenced within the module.
 pub const ValIterator = struct {
+    /// The next (symbol) value that will be returned.
     next_val: ?[]const u8,
+    /// The underlying iterator over values.
     iterator: std.StringHashMapUnmanaged(Val).Iterator,
 
+    /// Get the next referenced value.
     pub fn next(self: *ValIterator) ?Val {
         if (self.next_val) |v| {
             self.next_val = null;
@@ -37,6 +44,7 @@ pub const ValIterator = struct {
     }
 };
 
+/// Iterate over all referenced values.
 pub fn iterateVals(self: *const Module) ValIterator {
     return ValIterator{
         .next_val = null,

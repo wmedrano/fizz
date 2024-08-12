@@ -7,10 +7,11 @@ const Compiler = @import("Compiler.zig");
 pub fn main() !void {
     const input = try std.fs.cwd().readFileAlloc(std.heap.page_allocator, "main.fizz", 1024 * 1024);
     defer std.heap.page_allocator.free(input);
-    try runScript(input);
+    const stdout = std.io.getStdOut();
+    try runScript(stdout.writer(), input);
 }
 
-fn runScript(script_contents: []const u8) !void {
+fn runScript(writer: anytype, script_contents: []const u8) !void {
     var base_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = base_allocator.allocator();
     var vm = try Vm.init(allocator);
@@ -25,14 +26,14 @@ fn runScript(script_contents: []const u8) !void {
         var compiler = Compiler{ .vm = &vm };
         const ir = try Ir.init(ir_arena.allocator(), &node);
         const bytecode = try compiler.compile(ir);
-        const res = try vm.eval(bytecode);
+        const res = try vm.eval(bytecode, &.{});
         std.debug.print("${d}: {any}\n", .{ idx, res });
         _ = ir_arena.reset(.retain_capacity);
         try vm.runGc();
     }
-    std.debug.print("gc_duration: {d}ns\n", .{vm.gc_duration_nanos});
+    try writer.print("gc_duration: {d}ns\n", .{vm.runtime_stats.gc_duration_nanos});
 }
 
 test "empty input" {
-    try runScript("");
+    try runScript(std.io.null_writer, "");
 }

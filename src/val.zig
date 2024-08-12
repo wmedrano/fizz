@@ -31,13 +31,6 @@ pub const Val = union(enum) {
             else => return error.TypeError,
         }
     }
-
-    pub fn asByteCode(self: Val) !*ByteCode {
-        switch (self) {
-            .bytecode => |bc| return bc,
-            else => return error.TypeError,
-        }
-    }
 };
 
 test "val size is ok" {

@@ -25,7 +25,6 @@ const ByteCodeValuesIter = struct {
                 .eval => {},
                 .jump => {},
                 .jump_if => {},
-                .unwrap_list => {},
                 .ret => {},
             }
         }
@@ -78,8 +77,6 @@ pub const Instruction = union(enum) {
     jump: usize,
     /// Jump instructions in the bytecode if the top value of the stack is true.
     jump_if: usize,
-    /// Take the last item (must be a list) on the stack and unwrap its contents.
-    unwrap_list,
     /// Return the top value of the stack. The following should occur:
     ///   1. The top value is the return_value.
     ///   2. All items on the current function stack are popped.
@@ -108,8 +105,11 @@ pub const Instruction = union(enum) {
             .eval => |n| try writer.print("eval({d})", .{n}),
             .jump => |n| try writer.print("jump({d})", .{n}),
             .jump_if => |n| try writer.print("jump_if({d})", .{n}),
-            .unwrap_list => try writer.print("unwrap_list()", .{}),
             .ret => try writer.print("ret()", .{}),
         }
     }
 };
+
+test "instruction is small" {
+    try std.testing.expectEqual(@sizeOf(usize) * 4, @sizeOf(Instruction));
+}

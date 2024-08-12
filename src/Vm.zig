@@ -14,11 +14,13 @@ memory_manager: MemoryManager,
 stack: std.ArrayListUnmanaged(Val),
 frames: std.ArrayListUnmanaged(Frame),
 global_module: Module,
-gc_duration_nanos: u64,
+runtime_stats: struct {
+    gc_duration_nanos: u64 = 0,
+},
 
 const Frame = struct {
     bytecode: *ByteCode,
-    instruction_idx: usize,
+    instruction: [*]ByteCode.Instruction,
     stack_start: usize,
     ffi_boundary: bool,
 };
@@ -38,7 +40,7 @@ pub fn init(allocator: std.mem.Allocator) !Vm {
         .stack = stack,
         .frames = frames,
         .global_module = .{},
-        .gc_duration_nanos = 0,
+        .runtime_stats = .{},
     };
     try builtins.registerAll(&vm);
     return vm;
@@ -61,7 +63,7 @@ pub fn runGc(self: *Vm) !void {
 /// by values_iterator.
 pub fn runGcKeepAlive(self: *Vm, values_iterator: anytype) !void {
     var timer = try std.time.Timer.start();
-    defer self.gc_duration_nanos += timer.read();
+    defer self.runtime_stats.gc_duration_nanos += timer.read();
     for (self.stack.items) |v| try self.memory_manager.markVal(v);
     for (self.frames.items) |f| try self.memory_manager.markVal(.{ .bytecode = f.bytecode });
     while (values_iterator.next()) |v| try self.memory_manager.markVal(v);
@@ -74,6 +76,14 @@ pub fn runGcKeepAlive(self: *Vm, values_iterator: anytype) !void {
     try self.memory_manager.sweep();
 }
 
+/// Reset the state of the Vm.
+///
+/// TODO: Rename. This does not reset modules, only the stack and function frames.
+pub fn reset(self: *Vm) void {
+    self.stack.clearRetainingCapacity();
+    self.frames.clearRetainingCapacity();
+}
+
 /// Evaluate a single expression from the string.
 ///
 /// Note: Val is only valid until the next garbage collection call.
@@ -83,43 +93,63 @@ pub fn evalStr(self: *Vm, expr: []const u8) !Val {
     const ir = try Ir.initStrExpr(arena.allocator(), expr);
     var compiler = Compiler{ .vm = self };
     const bc = try compiler.compile(ir);
-    return self.eval(bc);
+    self.reset();
+    return self.eval(bc, &.{});
 }
 
 /// Evaluate the function and return the result. If bc is not already owned by self, then
 /// will take ownership of bc's lifecycle. This means bc.deinit() should not be called.
 ///
 /// Note: Val is only valid until the next garbage collection call.
-pub fn eval(self: *Vm, func: Val) !Val {
-    const bc = try func.asByteCode();
-    self.stack.clearRetainingCapacity();
-    const frame = .{
-        .bytecode = bc,
-        .instruction_idx = 0,
-        .stack_start = 0,
-        .ffi_boundary = true,
-    };
-    self.frames.appendAssumeCapacity(frame);
-    while (try self.runNext()) {}
-    return self.stack.popOrNull() orelse .none;
+pub fn eval(self: *Vm, func: Val, args: []const Val) !Val {
+    const stack_start = self.stack.items.len;
+    switch (func) {
+        .bytecode => |bc| {
+            const frame = .{
+                .bytecode = bc,
+                .instruction = bc.instructions.items.ptr,
+                .stack_start = stack_start,
+                .ffi_boundary = true,
+            };
+            self.frames.appendAssumeCapacity(frame);
+            try self.stack.appendSlice(self.memory_manager.allocator, args);
+            while (try self.runNext()) {}
+            if (self.stack.items.len > stack_start) {
+                const ret = self.stack.pop();
+                self.stack.items = self.stack.items[0..stack_start];
+                return ret;
+            } else {
+                @setCold(true);
+                return .none;
+            }
+        },
+        .native_fn => |nf| {
+            try self.stack.appendSlice(self.memory_manager.allocator, args);
+            const ret = try nf.impl(self, args);
+            if (self.stack.items.len > stack_start) self.stack.items = self.stack.items[0..stack_start];
+            return ret;
+        },
+        else => return error.TypeError,
+    }
 }
 
 fn runNext(self: *Vm) !bool {
     var frame = &self.frames.items[self.frames.items.len - 1];
-    const instruction = frame.bytecode.instructions.items[frame.instruction_idx];
-    switch (instruction) {
-        .push_const => |v| try self.executePushConst(v),
-        .deref => |s| try self.executeDeref(s),
+    switch (frame.instruction[0]) {
         .get_arg => |idx| try self.executeGetArg(frame, idx),
-        .eval => |n| try self.executeEval(frame, n),
-        .jump => |n| frame.instruction_idx += n,
-        .jump_if => |n| if (try self.stack.pop().asBool()) {
-            frame.instruction_idx += n;
+        .push_const => |v| try self.executePushConst(v),
+        .ret => {
+            const should_continue = try self.executeRet();
+            if (!should_continue) return false;
         },
-        .unwrap_list => try self.executeUnwrapList(),
-        .ret => if (!try self.executeRet()) return false,
+        .deref => |s| try self.executeDeref(s),
+        .eval => |n| try self.executeEval(frame, n),
+        .jump => |n| frame.instruction += n,
+        .jump_if => |n| if (try self.stack.pop().asBool()) {
+            frame.instruction += n;
+        },
     }
-    frame.instruction_idx += 1;
+    frame.instruction += 1;
     return true;
 }
 
@@ -146,9 +176,9 @@ fn executeEval(self: *Vm, frame: *const Frame, n: usize) !void {
     switch (func) {
         .bytecode => |bc| {
             if (bc.arg_count != arg_count) return error.ArrityError;
-            const new_frame = .{
+            const new_frame = Frame{
                 .bytecode = bc,
-                .instruction_idx = 0,
+                .instruction = bc.instructions.items.ptr,
                 .stack_start = stack_start,
                 .ffi_boundary = false,
             };
@@ -164,17 +194,9 @@ fn executeEval(self: *Vm, frame: *const Frame, n: usize) !void {
     }
 }
 
-fn executeUnwrapList(self: *Vm) !void {
-    const v = self.stack.pop();
-    switch (v) {
-        .list => |lst| try self.stack.appendSlice(self.memory_manager.allocator, lst),
-        else => return error.TypeError,
-    }
-}
-
 fn executeRet(self: *Vm) !bool {
     const old_frame = self.frames.pop();
-    if (self.frames.items.len == 0 or old_frame.ffi_boundary) {
+    if (old_frame.ffi_boundary) {
         return false;
     }
     const ret = self.stack.popOrNull() orelse .none;
@@ -206,9 +228,16 @@ test "lambda can eval" {
     try std.testing.expectEqualDeep(Val{ .boolean = true }, actual);
 }
 
-test "apply takes function and list" {
+test "apply takes native function and list" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
     const actual = try vm.evalStr("(apply + (list 1 2 3 4))");
     try std.testing.expectEqualDeep(Val{ .int = 10 }, actual);
+}
+
+test "apply takes bytecode function and list" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    const actual = try vm.evalStr("(apply (lambda (a b c d) (- 0 a b c d)) (list 1 2 3 4))");
+    try std.testing.expectEqualDeep(Val{ .int = -10 }, actual);
 }
