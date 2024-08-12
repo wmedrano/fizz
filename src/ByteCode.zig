@@ -6,6 +6,7 @@ const MemoryManager = @import("MemoryManager.zig");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+name: []const u8,
 arg_count: usize,
 instructions: std.ArrayListUnmanaged(Instruction),
 
@@ -33,6 +34,7 @@ const ByteCodeValuesIter = struct {
 };
 
 pub fn deinit(self: *ByteCode, allocator: std.mem.Allocator) void {
+    allocator.free(self.name);
     for (self.instructions.items) |i| {
         switch (i) {
             .deref => |sym| allocator.free(sym),
@@ -41,6 +43,19 @@ pub fn deinit(self: *ByteCode, allocator: std.mem.Allocator) void {
     }
     self.instructions.deinit(allocator);
     allocator.destroy(self);
+}
+
+/// Pretty print the AST.
+pub fn format(
+    self: *const ByteCode,
+    comptime _: []const u8,
+    _: std.fmt.FormatOptions,
+    writer: anytype,
+) !void {
+    try writer.print(
+        "{{ .name = {s}, .arg_count = {d}, .instructions = {any} }}",
+        .{ self.name, self.arg_count, self.instructions.items },
+    );
 }
 
 pub fn iterateVals(self: *const ByteCode) ByteCodeValuesIter {

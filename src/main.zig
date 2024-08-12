@@ -1,6 +1,6 @@
 const std = @import("std");
 const Ast = @import("Ast.zig");
-const Vm = @import("vm.zig").Vm;
+const Vm = @import("Vm.zig");
 const Ir = @import("ir.zig").Ir;
 const Compiler = @import("Compiler.zig");
 

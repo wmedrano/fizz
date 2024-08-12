@@ -1,7 +1,6 @@
 const MemoryManager = @This();
 const Val = @import("val.zig").Val;
 const ByteCode = @import("ByteCode.zig");
-const SlicesIter = @import("iter.zig").SlicesIter;
 
 const std = @import("std");
 
@@ -63,21 +62,25 @@ pub fn allocateSymbolVal(self: *MemoryManager, sym: []const u8) !Val {
     return .{ .symbol = try self.allocateString(sym) };
 }
 
-pub fn allocateList(self: *MemoryManager, len: usize) ![]Val {
-    var lst = try self.allocator.alloc(Val, len);
-    for (0..len) |idx| lst[idx] = .none;
-    try self.lists.put(self.allocator, lst.ptr, .{ .len = len, .color = self.reachable_color });
+pub fn allocateList(self: *MemoryManager, contents: []const Val) ![]Val {
+    if (contents.len == 0) {
+        return &[0]Val{};
+    }
+    var lst = try self.allocator.alloc(Val, contents.len);
+    for (0..contents.len) |idx| lst[idx] = contents[idx];
+    try self.lists.put(self.allocator, lst.ptr, .{ .len = contents.len, .color = self.reachable_color });
     return lst;
 }
 
-pub fn allocateListVal(self: *MemoryManager, len: usize) !Val {
-    return .{ .list = self.allocateList(len) };
+pub fn allocateListVal(self: *MemoryManager, contents: []const Val) !Val {
+    return .{ .list = try self.allocateList(contents) };
 }
 
 pub fn allocateByteCode(self: *MemoryManager) !*ByteCode {
     const bc = try self.allocator.create(ByteCode);
     try self.bytecode.put(self.allocator, bc, self.reachable_color);
     bc.* = ByteCode{
+        .name = "",
         .arg_count = 0,
         .instructions = .{},
     };

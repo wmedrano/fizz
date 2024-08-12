@@ -3,7 +3,7 @@ const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
 const Compiler = @This();
-const Vm = @import("vm.zig").Vm;
+const Vm = @import("Vm.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -45,7 +45,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
         .define => |def| {
             try bc.instructions.append(
                 self.vm.memory_manager.allocator,
-                .{ .push_const = self.vm.getVal("%define") orelse @panic("builtin %define not available") },
+                .{ .push_const = self.vm.global_module.getVal("%define") orelse @panic("builtin %define not available") },
             );
             try bc.instructions.append(
                 self.vm.memory_manager.allocator,
@@ -129,6 +129,7 @@ test "if expression" {
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
+            .name = "",
             .arg_count = 0,
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{
@@ -158,6 +159,7 @@ test "if expression without false branch returns none" {
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
+            .name = "",
             .arg_count = 0,
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{

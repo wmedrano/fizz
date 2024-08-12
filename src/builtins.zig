@@ -1,41 +1,44 @@
 const Val = @import("val.zig").Val;
-const Vm = @import("vm.zig").Vm;
+const Vm = @import("Vm.zig");
 const ByteCode = @import("ByteCode.zig");
 const Error = Val.NativeFn.Error;
 const std = @import("std");
 
-pub fn registerAll(vm: *Vm) !void {
-    try vm.defineVal("%define", .{ .native_fn = .{ .impl = define } });
-    try vm.defineVal("list", .{ .native_fn = .{ .impl = list } });
-    try vm.defineVal("first", .{ .native_fn = .{ .impl = first } });
-    try vm.defineVal("rest", .{ .native_fn = .{ .impl = rest } });
-    try vm.defineVal("len", .{ .native_fn = .{ .impl = len } });
-    try vm.defineVal("+", .{ .native_fn = .{ .impl = add } });
-    try vm.defineVal("-", .{ .native_fn = .{ .impl = subtract } });
-    try vm.defineVal("*", .{ .native_fn = .{ .impl = multiply } });
-    try vm.defineVal("/", .{ .native_fn = .{ .impl = divide } });
-    try vm.defineVal("<", .{ .native_fn = .{ .impl = less } });
-    try vm.defineVal(">", .{ .native_fn = .{ .impl = greater } });
+const apply_bytecode_instructions = [_]ByteCode.Instruction{ .unwrap_list, .{ .eval = 0 }, .ret };
 
-    var apply_bytecode = try vm.memory_manager.allocateByteCode();
-    apply_bytecode.arg_count = 2;
-    try apply_bytecode.instructions.appendSlice(
-        vm.memory_manager.allocator,
-        &[_]ByteCode.Instruction{ .unwrap_list, .{ .eval = 0 }, .ret },
-    );
-    try vm.defineVal(
-        "apply",
-        .{
-            .bytecode = apply_bytecode,
+pub fn registerAll(vm: *Vm) !void {
+    try vm.global_module.setVal(vm, "%define", .{ .native_fn = .{ .impl = define } });
+    try vm.global_module.setVal(vm, "list", .{ .native_fn = .{ .impl = list } });
+    try vm.global_module.setVal(vm, "first", .{ .native_fn = .{ .impl = first } });
+    try vm.global_module.setVal(vm, "rest", .{ .native_fn = .{ .impl = rest } });
+    try vm.global_module.setVal(vm, "len", .{ .native_fn = .{ .impl = len } });
+    try vm.global_module.setVal(vm, "+", .{ .native_fn = .{ .impl = add } });
+    try vm.global_module.setVal(vm, "-", .{ .native_fn = .{ .impl = subtract } });
+    try vm.global_module.setVal(vm, "*", .{ .native_fn = .{ .impl = multiply } });
+    try vm.global_module.setVal(vm, "/", .{ .native_fn = .{ .impl = divide } });
+    try vm.global_module.setVal(vm, "<", .{ .native_fn = .{ .impl = less } });
+    try vm.global_module.setVal(vm, ">", .{ .native_fn = .{ .impl = greater } });
+
+    const apply_bytecode = try vm.memory_manager.allocateByteCode();
+    apply_bytecode.* = .{
+        .name = try vm.memory_manager.allocator.dupe(u8, "apply"),
+        .arg_count = 2,
+        .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
+            .items = try vm.memory_manager.allocator.dupe(
+                ByteCode.Instruction,
+                &apply_bytecode_instructions,
+            ),
+            .capacity = apply_bytecode_instructions.len,
         },
-    );
+    };
+    try vm.global_module.setVal(vm, "apply", .{ .bytecode = apply_bytecode });
 }
 
 fn define(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
     switch (vals[0]) {
         .symbol => |s| {
-            vm.defineVal(s, vals[1]) catch return Error.RuntimeError;
+            vm.global_module.setVal(vm, s, vals[1]) catch return Error.RuntimeError;
         },
         else => return Error.TypeError,
     }
@@ -43,10 +46,7 @@ fn define(vm: *Vm, vals: []const Val) Error!Val {
 }
 
 fn list(vm: *Vm, vals: []const Val) Error!Val {
-    if (vals.len == 0) return Val{ .list = &[0]Val{} };
-    var ret = vm.memory_manager.allocateList(vals.len) catch return Error.RuntimeError;
-    for (0..vals.len) |idx| ret[idx] = vals[idx];
-    return .{ .list = ret };
+    return vm.memory_manager.allocateListVal(vals) catch return Error.RuntimeError;
 }
 
 fn first(_: *Vm, vals: []const Val) Error!Val {
@@ -62,12 +62,7 @@ fn rest(vm: *Vm, vals: []const Val) Error!Val {
     switch (vals[0]) {
         .list => |lst| {
             if (lst.len == 0) return Error.RuntimeError;
-            const slice = lst[1..];
-            const ret = vm.memory_manager.allocateList(slice.len) catch return Error.RuntimeError;
-            for (ret, slice) |*dst, src| {
-                dst.* = src;
-            }
-            return .{ .list = ret };
+            return vm.memory_manager.allocateListVal(lst[1..]) catch return Error.RuntimeError;
         },
         else => return Error.TypeError,
     }

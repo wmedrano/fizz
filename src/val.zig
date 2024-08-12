@@ -1,6 +1,6 @@
 const std = @import("std");
 const ByteCode = @import("ByteCode.zig");
-const Vm = @import("vm.zig").Vm;
+const Vm = @import("Vm.zig");
 
 pub const Val = union(enum) {
     none,
