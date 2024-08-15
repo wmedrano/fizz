@@ -14,9 +14,13 @@ memory_manager: MemoryManager,
 stack: std.ArrayListUnmanaged(Val),
 frames: std.ArrayListUnmanaged(Frame),
 global_module: Module,
-runtime_stats: struct {
+modules: std.StringHashMapUnmanaged(*Module),
+runtime_stats: RuntimeStats,
+
+const RuntimeStats = struct {
     gc_duration_nanos: u64 = 0,
-},
+    function_calls: u64 = 0,
+};
 
 const Frame = struct {
     bytecode: *ByteCode,
@@ -24,6 +28,8 @@ const Frame = struct {
     stack_start: usize,
     ffi_boundary: bool,
 };
+
+const global_module_name = "%global%";
 
 /// Create a new virtual machine.
 pub fn init(allocator: std.mem.Allocator) !Vm {
@@ -39,7 +45,11 @@ pub fn init(allocator: std.mem.Allocator) !Vm {
         .memory_manager = MemoryManager.init(allocator),
         .stack = stack,
         .frames = frames,
-        .global_module = .{},
+        .global_module = .{
+            .name = try allocator.dupe(u8, global_module_name),
+            .values = .{},
+        },
+        .modules = .{},
         .runtime_stats = .{},
     };
     try builtins.registerAll(&vm);
@@ -50,7 +60,12 @@ pub fn init(allocator: std.mem.Allocator) !Vm {
 pub fn deinit(self: *Vm) void {
     self.stack.deinit(self.memory_manager.allocator);
     self.frames.deinit(self.memory_manager.allocator);
-    self.global_module.deinit(self);
+
+    self.global_module.deinitLocal(self.memory_manager.allocator);
+    var modules_iterator = self.modules.valueIterator();
+    while (modules_iterator.next()) |module| module.*.deinit(self.memory_manager.allocator);
+    self.modules.deinit(self.memory_manager.allocator);
+
     self.memory_manager.deinit();
 }
 
@@ -73,6 +88,14 @@ pub fn runGcKeepAlive(self: *Vm, values_iterator: anytype) !void {
         try self.memory_manager.markVal(v);
     }
 
+    var modules_iterator = self.modules.valueIterator();
+    while (modules_iterator.next()) |module| {
+        var vals_iterator = module.*.iterateVals();
+        while (vals_iterator.next()) |v| {
+            try self.memory_manager.markVal(v);
+        }
+    }
+
     try self.memory_manager.sweep();
 }
 
@@ -84,14 +107,42 @@ pub fn reset(self: *Vm) void {
     self.frames.clearRetainingCapacity();
 }
 
+/// Get the module with the given name. If it does not exist, then it is created.
+pub fn getOrCreateModule(self: *Vm, name: []const u8) !*Module {
+    if (self.moduleByName(name)) |m| return m;
+    const m = try Module.init(self.memory_manager.allocator, name);
+    try self.registerModule(m);
+    return m;
+}
+
+/// Get the Module by name or null if it does not exist.
+pub fn moduleByName(self: *Vm, name: []const u8) ?*Module {
+    if (std.mem.eql(u8, name, self.global_module.name)) {
+        return &self.global_module;
+    }
+    return self.modules.get(name);
+}
+
+/// Register a module. An error is returned if there is a memory error or the module already exists.
+pub fn registerModule(self: *Vm, module: *Module) !void {
+    if (self.moduleByName(module.name)) |_| {
+        return error.ModuleAlreadyExists;
+    }
+    try self.modules.put(self.memory_manager.allocator, module.name, module);
+}
+
 /// Evaluate a single expression from the string.
 ///
 /// Note: Val is only valid until the next garbage collection call.
-pub fn evalStr(self: *Vm, expr: []const u8) !Val {
+pub fn evalStr(self: *Vm, module: []const u8, expr: []const u8) !Val {
     var arena = std.heap.ArenaAllocator.init(self.memory_manager.allocator);
     defer arena.deinit();
     const ir = try Ir.initStrExpr(arena.allocator(), expr);
-    var compiler = Compiler{ .vm = self };
+    var compiler = Compiler{
+        .vm = self,
+        .module = try self.getOrCreateModule(module),
+        .is_module = true,
+    };
     const bc = try compiler.compile(ir);
     self.reset();
     return self.eval(bc, &.{});
@@ -102,6 +153,7 @@ pub fn evalStr(self: *Vm, expr: []const u8) !Val {
 ///
 /// Note: Val is only valid until the next garbage collection call.
 pub fn eval(self: *Vm, func: Val, args: []const Val) !Val {
+    self.runtime_stats.function_calls += 1;
     const stack_start = self.stack.items.len;
     switch (func) {
         .bytecode => |bc| {
@@ -142,7 +194,7 @@ fn runNext(self: *Vm) !bool {
             const should_continue = try self.executeRet();
             if (!should_continue) return false;
         },
-        .deref => |s| try self.executeDeref(s),
+        .deref => |s| try self.executeDeref(frame, s),
         .eval => |n| try self.executeEval(frame, n),
         .jump => |n| frame.instruction += n,
         .jump_if => |n| if (try self.stack.pop().asBool()) {
@@ -157,8 +209,8 @@ fn executePushConst(self: *Vm, v: Val) !void {
     try self.stack.append(self.memory_manager.allocator, v);
 }
 
-fn executeDeref(self: *Vm, sym: []const u8) !void {
-    const v = self.global_module.getVal(sym) orelse return error.SymbolNotFound;
+fn executeDeref(self: *Vm, frame: *const Frame, sym: []const u8) !void {
+    const v = frame.bytecode.module.getVal(sym) orelse self.global_module.getVal(sym) orelse return error.SymbolNotFound;
     try self.stack.append(self.memory_manager.allocator, v);
 }
 
@@ -168,6 +220,7 @@ fn executeGetArg(self: *Vm, frame: *const Frame, idx: usize) !void {
 }
 
 fn executeEval(self: *Vm, frame: *const Frame, n: usize) !void {
+    self.runtime_stats.function_calls += 1;
     const norm_n: usize = if (n == 0) self.stack.items.len - frame.stack_start else n;
     const arg_count = norm_n - 1;
     const fn_idx = self.stack.items.len - norm_n;
@@ -208,36 +261,66 @@ fn executeRet(self: *Vm) !bool {
 test "can eval basic expression" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr("4");
+    const actual = try vm.evalStr("%test%", "4");
     try vm.runGc();
     try std.testing.expectEqual(Val{ .int = 4 }, actual);
+    try std.testing.expectEqual(1, vm.runtime_stats.function_calls);
 }
 
 test "can deref symbols" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
     try vm.global_module.setVal(&vm, "test", try vm.memory_manager.allocateStringVal("test-val"));
-    const actual = try vm.evalStr("test");
+    const actual = try vm.evalStr("%test%", "test");
     try std.testing.expectEqualDeep(Val{ .string = @constCast("test-val") }, actual);
 }
 
 test "lambda can eval" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr("((lambda (x) x) true)");
+    const actual = try vm.evalStr("%test%", "((lambda (x) x) true)");
     try std.testing.expectEqualDeep(Val{ .boolean = true }, actual);
 }
 
 test "apply takes native function and list" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr("(apply + (list 1 2 3 4))");
+    const actual = try vm.evalStr("%test%", "(apply + (list 1 2 3 4))");
     try std.testing.expectEqualDeep(Val{ .int = 10 }, actual);
 }
 
 test "apply takes bytecode function and list" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr("(apply (lambda (a b c d) (- 0 a b c d)) (list 1 2 3 4))");
+    const actual = try vm.evalStr("%test%", "(apply (lambda (a b c d) (- 0 a b c d)) (list 1 2 3 4))");
     try std.testing.expectEqualDeep(Val{ .int = -10 }, actual);
+}
+
+test "recursive function can eval" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    try std.testing.expectEqualDeep(
+        Val.none,
+        try vm.evalStr("%test%", "(define fib (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))"),
+    );
+    try std.testing.expectEqualDeep(
+        Val{ .int = 55 },
+        try vm.evalStr("%test%", "(fib 10)"),
+    );
+    try std.testing.expectEqualDeep(621, vm.runtime_stats.function_calls);
+}
+
+test "can only deref symbols from the same module" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    try (try vm.getOrCreateModule("%test%"))
+        .setVal(&vm, "test", try vm.memory_manager.allocateStringVal("test-val"));
+    try std.testing.expectEqualDeep(
+        Val{ .string = @constCast("test-val") },
+        try vm.evalStr("%test%", "test"),
+    );
+    try std.testing.expectError(
+        error.SymbolNotFound,
+        vm.evalStr("%other%", "test"),
+    );
 }

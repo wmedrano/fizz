@@ -23,11 +23,14 @@ fn runScript(writer: anytype, script_contents: []const u8) !void {
     var ir_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer ir_arena.deinit();
     for (1..ast.asts.len + 1, ast.asts) |idx, node| {
-        var compiler = Compiler{ .vm = &vm };
+        var compiler = Compiler{
+            .vm = &vm,
+            .module = try vm.getOrCreateModule("%test%"),
+        };
         const ir = try Ir.init(ir_arena.allocator(), &node);
         const bytecode = try compiler.compile(ir);
         const res = try vm.eval(bytecode, &.{});
-        std.debug.print("${d}: {any}\n", .{ idx, res });
+        try writer.print("${d}: {any}\n", .{ idx, res });
         _ = ir_arena.reset(.retain_capacity);
         try vm.runGc();
     }

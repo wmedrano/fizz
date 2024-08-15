@@ -1,6 +1,7 @@
 const MemoryManager = @This();
 const Val = @import("val.zig").Val;
 const ByteCode = @import("ByteCode.zig");
+const Module = @import("Module.zig");
 
 const std = @import("std");
 
@@ -76,13 +77,14 @@ pub fn allocateListVal(self: *MemoryManager, contents: []const Val) !Val {
     return .{ .list = try self.allocateList(contents) };
 }
 
-pub fn allocateByteCode(self: *MemoryManager) !*ByteCode {
+pub fn allocateByteCode(self: *MemoryManager, module: *Module) !*ByteCode {
     const bc = try self.allocator.create(ByteCode);
     try self.bytecode.put(self.allocator, bc, self.reachable_color);
     bc.* = ByteCode{
         .name = "",
         .arg_count = 0,
         .instructions = .{},
+        .module = module,
     };
     return bc;
 }

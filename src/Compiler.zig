@@ -4,14 +4,22 @@ const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
 const Compiler = @This();
 const Vm = @import("Vm.zig");
+const Module = @import("Module.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+
+const Error = std.mem.Allocator.Error || error{BadSyntax};
 
 /// The virtual machine to compile for.
 vm: *Vm,
 /// The arguments that are in scope.
 args: [][]const u8 = &.{},
+/// The module that the code is under.
+module: *Module,
+/// If a module is being compiled. This enables special behavior such as:
+///   - Define statements set values within the module.
+is_module: bool = false,
 
 /// Create a new ByteCode from the Ir.
 pub fn compile(self: *Compiler, ir: *const Ir) !Val {
@@ -20,8 +28,8 @@ pub fn compile(self: *Compiler, ir: *const Ir) !Val {
     return .{ .bytecode = bc };
 }
 
-fn compileImpl(self: *Compiler, irs: []const *const Ir) Allocator.Error!*ByteCode {
-    const bc = try self.vm.memory_manager.allocateByteCode();
+fn compileImpl(self: *Compiler, irs: []const *const Ir) Error!*ByteCode {
+    const bc = try self.vm.memory_manager.allocateByteCode(self.module);
     bc.arg_count = self.args.len;
     for (irs) |ir| try self.addIr(bc, ir);
     return bc;
@@ -34,7 +42,12 @@ fn argIdx(self: *const Compiler, arg_name: []const u8) ?usize {
     return null;
 }
 
-fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
+fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
+    const is_module = self.is_module;
+    if (@as(Ir.Tag, ir.*) != Ir.Tag.ret) {
+        self.is_module = false;
+    }
+    defer self.is_module = is_module;
     switch (ir.*) {
         .constant => |c| {
             try bc.instructions.append(
@@ -43,9 +56,12 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Allocator.Error!void {
             );
         },
         .define => |def| {
+            if (!is_module) {
+                return Error.BadSyntax;
+            }
             try bc.instructions.append(
                 self.vm.memory_manager.allocator,
-                .{ .push_const = self.vm.global_module.getVal("%define") orelse @panic("builtin %define not available") },
+                .{ .push_const = self.vm.global_module.getVal("%define%") orelse @panic("builtin %define% not available") },
             );
             try bc.instructions.append(
                 self.vm.memory_manager.allocator,
@@ -125,7 +141,10 @@ test "if expression" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = Compiler{ .vm = &vm };
+    var compiler = Compiler{
+        .vm = &vm,
+        .module = try vm.getOrCreateModule("%test%"),
+    };
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
@@ -141,6 +160,7 @@ test "if expression" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
+            .module = vm.moduleByName("%test%").?,
         }),
     }, actual);
 }
@@ -155,7 +175,10 @@ test "if expression without false branch returns none" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = Compiler{ .vm = &vm };
+    var compiler = Compiler{
+        .vm = &vm,
+        .module = try vm.getOrCreateModule("%test%"),
+    };
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
@@ -171,6 +194,103 @@ test "if expression without false branch returns none" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
+            .module = vm.moduleByName("%test%").?,
         }),
     }, actual);
+}
+
+test "module with define expressions" {
+    const ir = Ir{
+        .ret = .{
+            .exprs = @constCast(&[_]*Ir{
+                @constCast(&Ir{
+                    .define = .{
+                        .name = "pi",
+                        .expr = @constCast(&Ir{ .constant = .{ .float = 3.14 } }),
+                    },
+                }),
+                @constCast(&Ir{
+                    .define = .{
+                        .name = "e",
+                        .expr = @constCast(&Ir{ .constant = .{ .float = 2.718 } }),
+                    },
+                }),
+            }),
+        },
+    };
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var compiler = Compiler{
+        .vm = &vm,
+        .module = try vm.getOrCreateModule("%test%"),
+        .is_module = true,
+    };
+    const actual = try compiler.compile(&ir);
+    try std.testing.expectEqualDeep(Val{
+        .bytecode = @constCast(&ByteCode{
+            .name = "",
+            .arg_count = 0,
+            .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
+                .items = @constCast(&[_]ByteCode.Instruction{
+                    .{ .push_const = vm.global_module.getVal("%define%").? },
+                    .{ .push_const = try vm.memory_manager.allocateSymbolVal("pi") },
+                    .{ .push_const = .{ .float = 3.14 } },
+                    .{ .eval = 3 },
+                    .{ .push_const = vm.global_module.getVal("%define%").? },
+                    .{ .push_const = try vm.memory_manager.allocateSymbolVal("e") },
+                    .{ .push_const = .{ .float = 2.718 } },
+                    .{ .eval = 3 },
+                    .ret,
+                }),
+                .capacity = actual.bytecode.instructions.capacity,
+            },
+            .module = vm.moduleByName("%test%").?,
+        }),
+    }, actual);
+}
+
+test "define outside of module produces error" {
+    const ir = Ir{
+        .ret = .{
+            .exprs = @constCast(&[_]*Ir{
+                @constCast(&Ir{
+                    .define = .{
+                        .name = "pi",
+                        .expr = @constCast(&Ir{ .constant = .{ .float = 3.14 } }),
+                    },
+                }),
+            }),
+        },
+    };
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var compiler = Compiler{
+        .vm = &vm,
+        .module = try vm.getOrCreateModule("%test%"),
+        .is_module = false,
+    };
+    try std.testing.expectError(Error.BadSyntax, compiler.compile(&ir));
+}
+
+test "define in bad context produces error" {
+    const ir = Ir{
+        .if_expr = .{
+            .predicate = @constCast(&Ir{
+                .define = .{
+                    .name = "pi",
+                    .expr = @constCast(&Ir{ .constant = .{ .float = 3.14 } }),
+                },
+            }),
+            .true_expr = @constCast(&Ir{ .constant = .{ .int = 1 } }),
+            .false_expr = null,
+        },
+    };
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var compiler = Compiler{
+        .vm = &vm,
+        .module = try vm.getOrCreateModule("%test%"),
+        .is_module = true,
+    };
+    try std.testing.expectError(Error.BadSyntax, compiler.compile(&ir));
 }

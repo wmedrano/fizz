@@ -41,6 +41,7 @@ pub const Ir = union(enum) {
         exprs: []*Ir,
     },
 
+    pub const Tag = @typeInfo(Ir).Union.tag_type.?;
     pub const Error = std.mem.Allocator.Error || error{ NotImplemented, SyntaxError };
 
     const Const = union(enum) {

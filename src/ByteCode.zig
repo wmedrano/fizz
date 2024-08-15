@@ -2,6 +2,7 @@ const ByteCode = @This();
 const Val = @import("val.zig").Val;
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
+const Module = @import("Module.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -9,6 +10,7 @@ const Allocator = std.mem.Allocator;
 name: []const u8,
 arg_count: usize,
 instructions: std.ArrayListUnmanaged(Instruction),
+module: *Module,
 
 const ByteCodeValuesIter = struct {
     instructions: []const ByteCode.Instruction,

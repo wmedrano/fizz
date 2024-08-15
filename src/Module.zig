@@ -5,7 +5,21 @@ const Vm = @import("Vm.zig");
 const iter = @import("iter.zig");
 const std = @import("std");
 
+/// The name of the module. This string is owned and managed by Module.
+name: []const u8,
+/// The values within the module. The strings and values are managed by a Vm. Only the hashmap
+/// datastructure itself is managed by Module.
 values: std.StringHashMapUnmanaged(Val) = .{},
+
+/// Initialize an empty module with the given name.
+pub fn init(allocator: std.mem.Allocator, name: []const u8) !*Module {
+    const module = try allocator.create(Module);
+    module.* = .{
+        .name = try allocator.dupe(u8, name),
+        .values = .{},
+    };
+    return module;
+}
 
 /// Set a value within the module.
 pub fn setVal(self: *Module, vm: *Vm, sym: []const u8, v: Val) !void {
@@ -19,8 +33,17 @@ pub fn getVal(self: *const Module, sym: []const u8) ?Val {
 }
 
 /// Deinitialize the module.
-pub fn deinit(self: *Module, vm: *Vm) void {
-    self.values.deinit(vm.memory_manager.allocator);
+pub fn deinit(self: *Module, allocator: std.mem.Allocator) void {
+    self.deinitLocal(allocator);
+    allocator.destroy(self);
+}
+
+/// Deinitialize the module. deinitLocal should be used if the Module was allocated on the stack
+/// instead of with a memory allocator as done in init.
+pub fn deinitLocal(self: *Module, allocator: std.mem.Allocator) void {
+    self.values.deinit(allocator);
+    allocator.free(self.name);
+    self.* = undefined;
 }
 
 /// An iterator over values referenced within the module.
@@ -55,8 +78,8 @@ pub fn iterateVals(self: *const Module) ValIterator {
 test "can iterate over values" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var module = Module{};
-    defer module.deinit(&vm);
+    var module = try Module.init(std.testing.allocator, "%test%");
+    defer module.deinit(vm.memory_manager.allocator);
     try module.setVal(&vm, "test-val", .{ .int = 42 });
     var it = module.iterateVals();
     const actual = try iter.toSlice(Val, std.testing.allocator, &it);
