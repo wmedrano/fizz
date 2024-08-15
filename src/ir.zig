@@ -92,6 +92,15 @@ pub const Ir = union(enum) {
         return init(allocator, &asts.asts[0]);
     }
 
+    /// Populate define_set with all symbols that are defined.
+    pub fn definedVals(self: *const Ir, defined_vals: *std.StringHashMap(void)) !void {
+        switch (self.*) {
+            .define => |def| try defined_vals.put(def.name, {}),
+            .ret => |r| for (r.exprs) |e| try e.definedVals(defined_vals),
+            else => {},
+        }
+    }
+
     /// Deallocate Ir and all related memory.
     pub fn deinit(self: *Ir, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -487,4 +496,35 @@ test "define on lambda produces named function" {
 
 test "nested lambda with error produces error" {
     try std.testing.expectError(Ir.Error.SyntaxError, Ir.initStrExpr(std.testing.allocator, "(define foo (lambda () (lambda ())))"));
+}
+
+test "definedVals visits all defined values" {
+    const ir = &Ir{
+        .ret = .{
+            .exprs = @constCast(&[_]*Ir{
+                @constCast(&Ir{
+                    .define = .{
+                        .name = "foo",
+                        .expr = @constCast(&Ir{
+                            .constant = .{ .int = 1 },
+                        }),
+                    },
+                }),
+                @constCast(&Ir{
+                    .define = .{
+                        .name = "bar",
+                        .expr = @constCast(&Ir{
+                            .constant = .{ .int = 2 },
+                        }),
+                    },
+                }),
+            }),
+        },
+    };
+    var actual = std.StringHashMap(void).init(std.testing.allocator);
+    defer actual.deinit();
+    try ir.definedVals(&actual);
+    try std.testing.expectEqual(2, actual.count());
+    try std.testing.expect(actual.contains("foo"));
+    try std.testing.expect(actual.contains("bar"));
 }

@@ -138,11 +138,7 @@ pub fn evalStr(self: *Vm, module: []const u8, expr: []const u8) !Val {
     var arena = std.heap.ArenaAllocator.init(self.memory_manager.allocator);
     defer arena.deinit();
     const ir = try Ir.initStrExpr(arena.allocator(), expr);
-    var compiler = Compiler{
-        .vm = self,
-        .module = try self.getOrCreateModule(module),
-        .is_module = true,
-    };
+    var compiler = try Compiler.initModule(arena.allocator(), self, try self.getOrCreateModule(module));
     const bc = try compiler.compile(ir);
     self.reset();
     return self.eval(bc, &.{});
@@ -194,7 +190,8 @@ fn runNext(self: *Vm) !bool {
             const should_continue = try self.executeRet();
             if (!should_continue) return false;
         },
-        .deref => |s| try self.executeDeref(frame, s),
+        .deref_local => |s| try self.executeDeref(frame.bytecode.module, s),
+        .deref_global => |s| try self.executeDeref(&self.global_module, s),
         .eval => |n| try self.executeEval(frame, n),
         .jump => |n| frame.instruction += n,
         .jump_if => |n| if (try self.stack.pop().asBool()) {
@@ -209,8 +206,8 @@ fn executePushConst(self: *Vm, v: Val) !void {
     try self.stack.append(self.memory_manager.allocator, v);
 }
 
-fn executeDeref(self: *Vm, frame: *const Frame, sym: []const u8) !void {
-    const v = frame.bytecode.module.getVal(sym) orelse self.global_module.getVal(sym) orelse return error.SymbolNotFound;
+fn executeDeref(self: *Vm, module: *const Module, sym: []const u8) !void {
+    const v = module.getVal(sym) orelse return error.SymbolNotFound;
     try self.stack.append(self.memory_manager.allocator, v);
 }
 

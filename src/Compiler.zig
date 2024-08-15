@@ -14,17 +14,59 @@ const Error = std.mem.Allocator.Error || error{BadSyntax};
 /// The virtual machine to compile for.
 vm: *Vm,
 /// The arguments that are in scope.
-args: [][]const u8 = &.{},
+args: [][]const u8,
 /// The module that the code is under.
 module: *Module,
 /// If a module is being compiled. This enables special behavior such as:
 ///   - Define statements set values within the module.
 is_module: bool = false,
+/// The values that are defined by the Ir. This is populated when calling compile and is only valid
+/// when is_module is true.
+defined_vals: std.StringHashMap(void),
+
+/// Initialize a compiler for a function that lives inside `module`.
+pub fn initFunction(allocator: std.mem.Allocator, vm: *Vm, module: *Module, args: [][]const u8) !Compiler {
+    var defined_vals = std.StringHashMap(void).init(allocator);
+    var module_definitions = module.values.keyIterator();
+    while (module_definitions.next()) |def| try defined_vals.put(def.*, {});
+    return .{
+        .vm = vm,
+        .args = args,
+        .module = module,
+        .is_module = false,
+        .defined_vals = defined_vals,
+    };
+}
+
+/// Initialize a compiler for a module definition.
+pub fn initModule(allocator: std.mem.Allocator, vm: *Vm, module: *Module) !Compiler {
+    var defined_vals = std.StringHashMap(void).init(allocator);
+    var module_definitions = module.values.keyIterator();
+    while (module_definitions.next()) |def| try defined_vals.put(def.*, {});
+    return .{
+        .vm = vm,
+        .args = &.{},
+        .module = module,
+        .is_module = true,
+        .defined_vals = defined_vals,
+    };
+}
+
+/// Deinitialize the compiler.
+pub fn deinit(self: *Compiler) void {
+    self.defined_vals.deinit();
+}
 
 /// Create a new ByteCode from the Ir.
 pub fn compile(self: *Compiler, ir: *const Ir) !Val {
     var irs = [1]*const Ir{ir};
+    if (self.is_module) {
+        try ir.definedVals(&self.defined_vals);
+    }
     const bc = try self.compileImpl(&irs);
+    if (bc.instructions.items.len == 0 or bc.instructions.items[bc.instructions.items.len - 1].tag() != .ret) {
+        try bc.instructions.append(self.vm.memory_manager.allocator, .ret);
+    }
     return .{ .bytecode = bc };
 }
 
@@ -77,10 +119,12 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             if (self.argIdx(s)) |arg_idx| {
                 try bc.instructions.append(self.vm.memory_manager.allocator, .{ .get_arg = arg_idx });
             } else {
-                try bc.instructions.append(
-                    self.vm.memory_manager.allocator,
-                    .{ .deref = try self.vm.memory_manager.allocator.dupe(u8, s) },
-                );
+                const sym = try self.vm.memory_manager.allocator.dupe(u8, s);
+                if (self.defined_vals.contains(s)) {
+                    try bc.instructions.append(self.vm.memory_manager.allocator, .{ .deref_local = sym });
+                } else {
+                    try bc.instructions.append(self.vm.memory_manager.allocator, .{ .deref_global = sym });
+                }
             }
         },
         .function_call => |f| {
@@ -141,10 +185,8 @@ test "if expression" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = Compiler{
-        .vm = &vm,
-        .module = try vm.getOrCreateModule("%test%"),
-    };
+    var compiler = try Compiler.initModule(std.testing.allocator, &vm, try vm.getOrCreateModule("%test%"));
+    defer compiler.deinit();
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
@@ -157,6 +199,7 @@ test "if expression" {
                     .{ .push_const = .{ .int = 2 } },
                     .{ .jump = 1 },
                     .{ .push_const = .{ .int = 1 } },
+                    .ret,
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
@@ -175,10 +218,8 @@ test "if expression without false branch returns none" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = Compiler{
-        .vm = &vm,
-        .module = try vm.getOrCreateModule("%test%"),
-    };
+    var compiler = try Compiler.initModule(std.testing.allocator, &vm, try vm.getOrCreateModule("%test%"));
+    defer compiler.deinit();
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
@@ -191,6 +232,7 @@ test "if expression without false branch returns none" {
                     .{ .push_const = .none },
                     .{ .jump = 1 },
                     .{ .push_const = .{ .int = 1 } },
+                    .ret,
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
@@ -220,11 +262,8 @@ test "module with define expressions" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = Compiler{
-        .vm = &vm,
-        .module = try vm.getOrCreateModule("%test%"),
-        .is_module = true,
-    };
+    var compiler = try Compiler.initModule(std.testing.allocator, &vm, try vm.getOrCreateModule("%test%"));
+    defer compiler.deinit();
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
@@ -264,11 +303,8 @@ test "define outside of module produces error" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = Compiler{
-        .vm = &vm,
-        .module = try vm.getOrCreateModule("%test%"),
-        .is_module = false,
-    };
+    var compiler = try Compiler.initFunction(std.testing.allocator, &vm, try vm.getOrCreateModule("%test%"), &.{});
+    defer compiler.deinit();
     try std.testing.expectError(Error.BadSyntax, compiler.compile(&ir));
 }
 
@@ -287,10 +323,7 @@ test "define in bad context produces error" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = Compiler{
-        .vm = &vm,
-        .module = try vm.getOrCreateModule("%test%"),
-        .is_module = true,
-    };
+    var compiler = try Compiler.initModule(std.testing.allocator, &vm, try vm.getOrCreateModule("%test%"));
+    defer compiler.deinit();
     try std.testing.expectError(Error.BadSyntax, compiler.compile(&ir));
 }

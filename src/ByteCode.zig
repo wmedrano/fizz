@@ -12,33 +12,12 @@ arg_count: usize,
 instructions: std.ArrayListUnmanaged(Instruction),
 module: *Module,
 
-const ByteCodeValuesIter = struct {
-    instructions: []const ByteCode.Instruction,
-
-    pub fn next(self: *ByteCodeValuesIter) ?Val {
-        while (self.instructions.len > 0) {
-            const instruction = self.instructions[0];
-            self.instructions.ptr += 1;
-            self.instructions.len -= 1;
-            switch (instruction) {
-                .push_const => |v| return v,
-                .deref => {},
-                .get_arg => {},
-                .eval => {},
-                .jump => {},
-                .jump_if => {},
-                .ret => {},
-            }
-        }
-        return null;
-    }
-};
-
 pub fn deinit(self: *ByteCode, allocator: std.mem.Allocator) void {
     allocator.free(self.name);
     for (self.instructions.items) |i| {
         switch (i) {
-            .deref => |sym| allocator.free(sym),
+            .deref_local => |sym| allocator.free(sym),
+            .deref_global => |sym| allocator.free(sym),
             else => {},
         }
     }
@@ -59,6 +38,30 @@ pub fn format(
     );
 }
 
+const ByteCodeValuesIter = struct {
+    instructions: []const ByteCode.Instruction,
+
+    pub fn next(self: *ByteCodeValuesIter) ?Val {
+        while (self.instructions.len > 0) {
+            const instruction = self.instructions[0];
+            self.instructions.ptr += 1;
+            self.instructions.len -= 1;
+            switch (instruction) {
+                .push_const => |v| return v,
+                .deref_local => {},
+                .deref_global => {},
+                .get_arg => {},
+                .eval => {},
+                .jump => {},
+                .jump_if => {},
+                .ret => {},
+            }
+        }
+        return null;
+    }
+};
+
+/// Returns an iterater over all values referenced by the bytecode.
 pub fn iterateVals(self: *const ByteCode) ByteCodeValuesIter {
     return .{
         .instructions = self.instructions.items,
@@ -69,8 +72,10 @@ pub fn iterateVals(self: *const ByteCode) ByteCodeValuesIter {
 pub const Instruction = union(enum) {
     /// Push a constant onto the stack.
     push_const: Val,
-    /// Dereference the symbol at push it onto the stack.
-    deref: []const u8,
+    /// Dereference the symbol from the current module.
+    deref_local: []const u8,
+    /// Dereference the symbol from the global module.
+    deref_global: []const u8,
     /// Get the nth value (0-based index) from the base of the current function call stack.
     get_arg: usize,
     /// Evaluate the top n elements of the stack. The deepmost value should be a function.
@@ -86,11 +91,20 @@ pub const Instruction = union(enum) {
     ///      with the return_value.
     ret,
 
+    /// The enum associated with the instruction.
+    const Tag = std.meta.Tag(Instruction);
+
+    /// Deinitialize the instruction.
     pub fn deinit(self: *Instruction, allocator: Allocator) void {
         switch (self.*) {
             .deref => |s| allocator.free(s),
             else => {},
         }
+    }
+
+    /// Get the tag associated with the instruction.
+    pub fn tag(self: *const Instruction) Tag {
+        return @as(Instruction.Tag, self.*);
     }
 
     /// Pretty print the AST.
@@ -102,7 +116,8 @@ pub const Instruction = union(enum) {
     ) !void {
         switch (self.*) {
             .push_const => |v| try writer.print("push_const({any})", .{v}),
-            .deref => |sym| try writer.print("deref({s})", .{sym}),
+            .deref_global => |sym| try writer.print("deref_global({s})", .{sym}),
+            .deref_local => |sym| try writer.print("deref_local({s})", .{sym}),
             .get_arg => |n| try writer.print("get_arg({d})", .{n}),
             .eval => |n| try writer.print("eval({d})", .{n}),
             .jump => |n| try writer.print("jump({d})", .{n}),
