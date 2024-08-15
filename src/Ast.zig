@@ -99,6 +99,8 @@ pub const Node = union(enum) {
             lambda,
             // "define"
             define,
+            // "import"
+            import,
         },
         /// A reference to a variable or constant. The name is stored as a string.
         identifier: []const u8,
@@ -118,6 +120,7 @@ pub const Node = union(enum) {
                     .if_expr => try writer.print("if", .{}),
                     .lambda => try writer.print("lambda", .{}),
                     .define => try writer.print("define", .{}),
+                    .import => try writer.print("import", .{}),
                 },
                 .identifier => |s| try writer.print("identifier({s})", .{s}),
                 .string => |s| try writer.print("string({s})", .{s}),
@@ -144,6 +147,9 @@ pub const Node = union(enum) {
             }
             if (std.mem.eql(u8, "define", ident)) {
                 return .{ .keyword = .define };
+            }
+            if (std.mem.eql(u8, "import", ident)) {
+                return .{ .keyword = .import };
             }
             if (std.fmt.parseInt(i64, ident, 10)) |i| {
                 return .{ .int = i };

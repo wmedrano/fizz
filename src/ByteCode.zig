@@ -18,6 +18,7 @@ pub fn deinit(self: *ByteCode, allocator: std.mem.Allocator) void {
         switch (i) {
             .deref_local => |sym| allocator.free(sym),
             .deref_global => |sym| allocator.free(sym),
+            .import_module => |path| allocator.free(path),
             else => {},
         }
     }
@@ -54,6 +55,7 @@ const ByteCodeValuesIter = struct {
                 .eval => {},
                 .jump => {},
                 .jump_if => {},
+                .import_module => {},
                 .ret => {},
             }
         }
@@ -84,6 +86,8 @@ pub const Instruction = union(enum) {
     jump: usize,
     /// Jump instructions in the bytecode if the top value of the stack is true.
     jump_if: usize,
+    /// Import a module.
+    import_module: []const u8,
     /// Return the top value of the stack. The following should occur:
     ///   1. The top value is the return_value.
     ///   2. All items on the current function stack are popped.
@@ -93,14 +97,6 @@ pub const Instruction = union(enum) {
 
     /// The enum associated with the instruction.
     const Tag = std.meta.Tag(Instruction);
-
-    /// Deinitialize the instruction.
-    pub fn deinit(self: *Instruction, allocator: Allocator) void {
-        switch (self.*) {
-            .deref => |s| allocator.free(s),
-            else => {},
-        }
-    }
 
     /// Get the tag associated with the instruction.
     pub fn tag(self: *const Instruction) Tag {
@@ -122,6 +118,7 @@ pub const Instruction = union(enum) {
             .eval => |n| try writer.print("eval({d})", .{n}),
             .jump => |n| try writer.print("jump({d})", .{n}),
             .jump_if => |n| try writer.print("jump_if({d})", .{n}),
+            .import_module => |m| try writer.print("import({s})", .{m}),
             .ret => try writer.print("ret()", .{}),
         }
     }

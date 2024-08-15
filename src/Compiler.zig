@@ -115,6 +115,15 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
                 .{ .eval = 3 },
             );
         },
+        .import_module => |m| {
+            if (!is_module) {
+                return Error.BadSyntax;
+            }
+            try bc.instructions.append(
+                self.vm.memory_manager.allocator,
+                .{ .import_module = try self.vm.memory_manager.allocator.dupe(u8, m.path) },
+            );
+        },
         .deref => |s| {
             if (self.argIdx(s)) |arg_idx| {
                 try bc.instructions.append(self.vm.memory_manager.allocator, .{ .get_arg = arg_idx });
@@ -203,7 +212,7 @@ test "if expression" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = vm.moduleByName("%test%").?,
+            .module = vm.getModule("%test%").?,
         }),
     }, actual);
 }
@@ -236,7 +245,7 @@ test "if expression without false branch returns none" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = vm.moduleByName("%test%").?,
+            .module = vm.getModule("%test%").?,
         }),
     }, actual);
 }
@@ -283,7 +292,7 @@ test "module with define expressions" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = vm.moduleByName("%test%").?,
+            .module = vm.getModule("%test%").?,
         }),
     }, actual);
 }

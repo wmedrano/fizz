@@ -1,6 +1,7 @@
 const Vm = @This();
 
 const Module = @import("Module.zig");
+const Ast = @import("Ast.zig");
 const Val = @import("val.zig").Val;
 const ByteCode = @import("ByteCode.zig");
 const Ir = @import("ir.zig").Ir;
@@ -17,6 +18,8 @@ global_module: Module,
 modules: std.StringHashMapUnmanaged(*Module),
 runtime_stats: RuntimeStats,
 
+const Error = std.mem.Allocator.Error || Val.NativeFn.Error || error{ SymbolNotFound, FileError, SyntaxError };
+
 const RuntimeStats = struct {
     gc_duration_nanos: u64 = 0,
     function_calls: u64 = 0,
@@ -32,7 +35,7 @@ const Frame = struct {
 const global_module_name = "%global%";
 
 /// Create a new virtual machine.
-pub fn init(allocator: std.mem.Allocator) !Vm {
+pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!Vm {
     const stack = try std.ArrayListUnmanaged(Val).initCapacity(
         allocator,
         std.mem.page_size / @sizeOf(Val),
@@ -109,14 +112,14 @@ pub fn reset(self: *Vm) void {
 
 /// Get the module with the given name. If it does not exist, then it is created.
 pub fn getOrCreateModule(self: *Vm, name: []const u8) !*Module {
-    if (self.moduleByName(name)) |m| return m;
+    if (self.getModule(name)) |m| return m;
     const m = try Module.init(self.memory_manager.allocator, name);
     try self.registerModule(m);
     return m;
 }
 
 /// Get the Module by name or null if it does not exist.
-pub fn moduleByName(self: *Vm, name: []const u8) ?*Module {
+pub fn getModule(self: *Vm, name: []const u8) ?*Module {
     if (std.mem.eql(u8, name, self.global_module.name)) {
         return &self.global_module;
     }
@@ -125,10 +128,19 @@ pub fn moduleByName(self: *Vm, name: []const u8) ?*Module {
 
 /// Register a module. An error is returned if there is a memory error or the module already exists.
 pub fn registerModule(self: *Vm, module: *Module) !void {
-    if (self.moduleByName(module.name)) |_| {
+    if (self.getModule(module.name)) |_| {
         return error.ModuleAlreadyExists;
     }
     try self.modules.put(self.memory_manager.allocator, module.name, module);
+}
+
+/// Delete a module.
+pub fn deleteModule(self: *Vm, module: *Module) !void {
+    if (self.modules.getEntry(module.name)) |m| {
+        if (m.value_ptr.* != module) return error.ModuleDoesNotMatchRegisteredModule;
+        self.modules.removeByPtr(m.key_ptr);
+    }
+    return error.ModuleDoesNotExist;
 }
 
 /// Evaluate a single expression from the string.
@@ -148,7 +160,7 @@ pub fn evalStr(self: *Vm, module: []const u8, expr: []const u8) !Val {
 /// will take ownership of bc's lifecycle. This means bc.deinit() should not be called.
 ///
 /// Note: Val is only valid until the next garbage collection call.
-pub fn eval(self: *Vm, func: Val, args: []const Val) !Val {
+pub fn eval(self: *Vm, func: Val, args: []const Val) Error!Val {
     self.runtime_stats.function_calls += 1;
     const stack_start = self.stack.items.len;
     switch (func) {
@@ -177,11 +189,11 @@ pub fn eval(self: *Vm, func: Val, args: []const Val) !Val {
             if (self.stack.items.len > stack_start) self.stack.items = self.stack.items[0..stack_start];
             return ret;
         },
-        else => return error.TypeError,
+        else => return Error.TypeError,
     }
 }
 
-fn runNext(self: *Vm) !bool {
+fn runNext(self: *Vm) Error!bool {
     var frame = &self.frames.items[self.frames.items.len - 1];
     switch (frame.instruction[0]) {
         .get_arg => |idx| try self.executeGetArg(frame, idx),
@@ -197,6 +209,7 @@ fn runNext(self: *Vm) !bool {
         .jump_if => |n| if (try self.stack.pop().asBool()) {
             frame.instruction += n;
         },
+        .import_module => |path| try self.executeImportModule(path),
     }
     frame.instruction += 1;
     return true;
@@ -206,8 +219,8 @@ fn executePushConst(self: *Vm, v: Val) !void {
     try self.stack.append(self.memory_manager.allocator, v);
 }
 
-fn executeDeref(self: *Vm, module: *const Module, sym: []const u8) !void {
-    const v = module.getVal(sym) orelse return error.SymbolNotFound;
+fn executeDeref(self: *Vm, module: *const Module, sym: []const u8) Error!void {
+    const v = module.getVal(sym) orelse return Error.SymbolNotFound;
     try self.stack.append(self.memory_manager.allocator, v);
 }
 
@@ -253,6 +266,24 @@ fn executeRet(self: *Vm) !bool {
     self.stack.items = self.stack.items[0..old_frame.stack_start];
     self.stack.items[old_frame.stack_start - 1] = ret;
     return true;
+}
+
+fn executeImportModule(self: *Vm, module_path: []const u8) Error!void {
+    if (self.getModule(module_path)) |_| {
+        return;
+    }
+
+    var arena = std.heap.ArenaAllocator.init(self.memory_manager.allocator);
+    defer arena.deinit();
+    const file_size_limit = 64 * 1024 * 1024;
+    const contents = std.fs.cwd().readFileAlloc(arena.allocator(), module_path, file_size_limit) catch return Error.FileError;
+    const ast = Ast.initWithStr(arena.allocator(), contents) catch return Error.SyntaxError;
+    const module = self.getOrCreateModule(module_path) catch return Error.RuntimeError;
+    errdefer self.deleteModule(module) catch {};
+    const ir = Ir.init(arena.allocator(), ast.asts) catch return Error.RuntimeError;
+    var compiler = try Compiler.initModule(arena.allocator(), self, module);
+    const module_bytecode = compiler.compile(ir) catch Error.RuntimeError;
+    _ = try self.eval(try module_bytecode, &.{});
 }
 
 test "can eval basic expression" {

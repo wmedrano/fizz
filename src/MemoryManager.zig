@@ -63,13 +63,21 @@ pub fn allocateSymbolVal(self: *MemoryManager, sym: []const u8) !Val {
     return .{ .symbol = try self.allocateString(sym) };
 }
 
+pub fn allocateUninitializedList(self: *MemoryManager, len: usize) ![]Val {
+    if (len == 0) {
+        return &[0]Val{};
+    }
+    const lst = try self.allocator.alloc(Val, len);
+    try self.lists.put(self.allocator, lst.ptr, .{ .len = len, .color = self.reachable_color });
+    return lst;
+}
+
 pub fn allocateList(self: *MemoryManager, contents: []const Val) ![]Val {
     if (contents.len == 0) {
         return &[0]Val{};
     }
-    var lst = try self.allocator.alloc(Val, contents.len);
+    var lst = try self.allocateUninitializedList(contents.len);
     for (0..contents.len) |idx| lst[idx] = contents[idx];
-    try self.lists.put(self.allocator, lst.ptr, .{ .len = contents.len, .color = self.reachable_color });
     return lst;
 }
 

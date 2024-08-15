@@ -22,33 +22,38 @@ fn runScript(writer: anytype, script_contents: []const u8, require_determinism: 
     const ast = try Ast.initWithStr(ast_arena.allocator(), script_contents);
     var ir_arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer ir_arena.deinit();
-    for (1..ast.asts.len + 1, ast.asts) |idx, node| {
-        try runAst(ir_arena.allocator(), writer, &vm, idx, &node);
+    var expr_number: usize = 1;
+    for (ast.asts) |node| {
+        try runAst(ir_arena.allocator(), writer, &vm, &expr_number, &node);
         _ = ir_arena.reset(.retain_capacity);
     }
     if (!require_determinism) try writer.print("gc_duration: {d}ns\n", .{vm.runtime_stats.gc_duration_nanos});
 }
 
-fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *Vm, idx: usize, ast: *const Ast.Node) !void {
+fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *Vm, expr_number: *usize, ast: *const Ast.Node) !void {
     var compiler = try Compiler.initModule(allocator, vm, try vm.getOrCreateModule("%test%"));
     defer compiler.deinit();
-    const ir = try Ir.init(allocator, ast);
+    const ir = try Ir.init(allocator, &[1]Ast.Node{ast.*});
     defer ir.deinit(allocator);
     const bytecode = try compiler.compile(ir);
     const res = try vm.eval(bytecode, &.{});
-    try writer.print("${d}: {any}\n", .{ idx, res });
+    if (res.tag() != .none) {
+        try writer.print("${d}: {any}\n", .{ expr_number.*, res });
+        expr_number.* += 1;
+    }
     try vm.runGc();
 }
 
 test "simple input" {
     var actual = std.ArrayList(u8).init(std.testing.allocator);
     defer actual.deinit();
-    try runScript(actual.writer(), "(+ 1 2) (- 3.0 4.0) (< 1 2) (list \"hello\" 42)", true);
+    try runScript(actual.writer(), "(+ 1 2) (- 3.0 4.0) (< 1 2) (list \"hello\" 42) (%modules%)", true);
     try std.testing.expectEqualStrings(
         \\$1: 3
         \\$2: -1
         \\$3: true
         \\$4: ("hello" 42)
+        \\$5: ("%global%" "%test%")
         \\
     , actual.items);
 }

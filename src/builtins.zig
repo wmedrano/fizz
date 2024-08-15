@@ -6,6 +6,7 @@ const std = @import("std");
 
 pub fn registerAll(vm: *Vm) !void {
     try vm.global_module.setVal(vm, "%define%", .{ .native_fn = .{ .impl = define } });
+    try vm.global_module.setVal(vm, "%modules%", .{ .native_fn = .{ .impl = modules } });
     try vm.global_module.setVal(vm, "apply", .{ .native_fn = .{ .impl = apply } });
     try vm.global_module.setVal(vm, "list", .{ .native_fn = .{ .impl = list } });
     try vm.global_module.setVal(vm, "first", .{ .native_fn = .{ .impl = first } });
@@ -31,6 +32,22 @@ fn define(vm: *Vm, vals: []const Val) Error!Val {
         else => return Error.TypeError,
     }
     return .none;
+}
+
+fn modules(vm: *Vm, vals: []const Val) Error!Val {
+    if (vals.len != 0) return Error.ArrityError;
+    const module_count = 1 + vm.modules.count();
+    var ret = vm.memory_manager.allocateUninitializedList(module_count) catch return Error.RuntimeError;
+    ret[0] = vm.memory_manager.allocateStringVal(vm.global_module.name) catch return Error.RuntimeError;
+
+    var modules_iter = vm.modules.keyIterator();
+    var idx: usize = 0;
+    while (modules_iter.next()) |m| {
+        idx += 1;
+        ret[idx] = vm.memory_manager.allocateStringVal(m.*) catch return Error.RuntimeError;
+    }
+
+    return .{ .list = ret };
 }
 
 fn apply(vm: *Vm, vals: []const Val) Error!Val {

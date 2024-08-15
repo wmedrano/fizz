@@ -47,6 +47,11 @@ pub const Val = union(enum) {
         }
     }
 
+    /// Get the tag for value.
+    pub fn tag(self: Val) Tag {
+        return @as(Tag, self);
+    }
+
     pub fn asBool(self: Val) !bool {
         switch (self) {
             .boolean => |b| return b,

@@ -13,6 +13,10 @@ pub const Ir = union(enum) {
         name: []const u8,
         expr: *Ir,
     },
+    /// Import a module from a path.
+    import_module: struct {
+        path: []const u8,
+    },
     /// Dereference an identifier.
     deref: []const u8,
     /// A function call.
@@ -65,15 +69,17 @@ pub const Ir = union(enum) {
     };
 
     /// Initialize an Ir from an AST.
-    pub fn init(allocator: std.mem.Allocator, ast: *const Ast.Node) !*Ir {
+    pub fn init(allocator: std.mem.Allocator, ast: []const Ast.Node) !*Ir {
         var builder = IrBuilder{
             .allocator = allocator,
             .arg_to_idx = .{},
         };
-        const exprs = try allocator.alloc(*Ir, 1);
+        const exprs = try allocator.alloc(*Ir, ast.len);
         errdefer allocator.free(exprs);
-        exprs[0] = try builder.build("_", ast);
-        errdefer exprs[0].deinit(allocator);
+        for (0..ast.len, ast) |idx, node| {
+            exprs[idx] = try builder.build("_", &node);
+            errdefer exprs[idx].deinit(allocator);
+        }
         const ret = try allocator.create(Ir);
         ret.* = Ir{
             .ret = .{
@@ -87,9 +93,7 @@ pub const Ir = union(enum) {
     pub fn initStrExpr(allocator: std.mem.Allocator, expr: []const u8) !*Ir {
         var asts = try Ast.initWithStr(allocator, expr);
         defer asts.deinit();
-        // Only a single ast is supported.
-        if (asts.asts.len != 1) return Error.SyntaxError;
-        return init(allocator, &asts.asts[0]);
+        return init(allocator, asts.asts);
     }
 
     /// Populate define_set with all symbols that are defined.
@@ -106,6 +110,7 @@ pub const Ir = union(enum) {
         switch (self.*) {
             .constant => {},
             .define => |def| def.expr.deinit(allocator),
+            .import_module => {},
             .deref => {},
             .function_call => |*f| {
                 f.function.deinit(allocator);
@@ -134,6 +139,7 @@ pub const Ir = union(enum) {
         switch (self.*) {
             .constant => |c| try writer.print("constant({any}) ", .{c}),
             .define => |d| try writer.print("define({s}, {any}) ", .{ d.name, d.expr }),
+            .import_module => |i| try writer.print("import({s})", .{i.path}),
             .deref => |d| try writer.print("deref({s}) ", .{d}),
             .function_call => |f| try writer.print("funcall({any}, {any}) ", .{ f.function, f.args }),
             .if_expr => |e| try writer.print("if({any}, {any}, {any}) ", .{ e.predicate, e.true_expr, e.false_expr }),
@@ -184,6 +190,10 @@ const IrBuilder = struct {
                                         2 => return self.buildDefine(&rest[0], &rest[1]),
                                         else => return Error.SyntaxError,
                                     }
+                                },
+                                .import => {
+                                    if (rest.len != 1) return Error.SyntaxError;
+                                    return self.buildImportModule(&rest[0]);
                                 },
                             },
                             else => return self.buildFunctionCall(first, rest),
@@ -240,6 +250,24 @@ const IrBuilder = struct {
             .define = .{
                 .name = name,
                 .expr = expr,
+            },
+        };
+        return ret;
+    }
+
+    fn buildImportModule(self: *IrBuilder, path_expr: *const Ast.Node) Error!*Ir {
+        const path = switch (path_expr.*) {
+            .tree => return Error.SyntaxError,
+            .leaf => |l| switch (l) {
+                .string => |ident| ident,
+                else => return Error.SyntaxError,
+            },
+        };
+        const ret = try self.allocator.create(Ir);
+        errdefer ret.deinit(self.allocator);
+        ret.* = .{
+            .import_module = .{
+                .path = path,
             },
         };
         return ret;
