@@ -65,7 +65,7 @@ pub fn compile(self: *Compiler, ir: *const Ir) !Val {
     }
     const bc = try self.compileImpl(&irs);
     if (bc.instructions.items.len == 0 or bc.instructions.items[bc.instructions.items.len - 1].tag() != .ret) {
-        try bc.instructions.append(self.vm.memory_manager.allocator, .ret);
+        try bc.instructions.append(self.vm.allocator(), .ret);
     }
     return .{ .bytecode = bc };
 }
@@ -93,7 +93,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
     switch (ir.*) {
         .constant => |c| {
             try bc.instructions.append(
-                self.vm.memory_manager.allocator,
+                self.vm.allocator(),
                 .{ .push_const = try c.toVal(&self.vm.memory_manager) },
             );
         },
@@ -102,16 +102,16 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
                 return Error.BadSyntax;
             }
             try bc.instructions.append(
-                self.vm.memory_manager.allocator,
+                self.vm.allocator(),
                 .{ .push_const = self.vm.global_module.getVal("%define%") orelse @panic("builtin %define% not available") },
             );
             try bc.instructions.append(
-                self.vm.memory_manager.allocator,
+                self.vm.allocator(),
                 .{ .push_const = try self.vm.memory_manager.allocateSymbolVal(def.name) },
             );
             try self.addIr(bc, def.expr);
             try bc.instructions.append(
-                self.vm.memory_manager.allocator,
+                self.vm.allocator(),
                 .{ .eval = 3 },
             );
         },
@@ -120,19 +120,20 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
                 return Error.BadSyntax;
             }
             try bc.instructions.append(
-                self.vm.memory_manager.allocator,
-                .{ .import_module = try self.vm.memory_manager.allocator.dupe(u8, m.path) },
+                self.vm.allocator(),
+                .{ .import_module = try self.vm.allocator().dupe(u8, m.path) },
             );
         },
         .deref => |s| {
             if (self.argIdx(s)) |arg_idx| {
-                try bc.instructions.append(self.vm.memory_manager.allocator, .{ .get_arg = arg_idx });
+                try bc.instructions.append(self.vm.allocator(), .{ .get_arg = arg_idx });
             } else {
-                const sym = try self.vm.memory_manager.allocator.dupe(u8, s);
-                if (self.defined_vals.contains(s)) {
-                    try bc.instructions.append(self.vm.memory_manager.allocator, .{ .deref_local = sym });
+                const sym = try self.vm.allocator().dupe(u8, s);
+                const parsed_sym = Module.parseModuleAndSymbol(sym);
+                if (self.defined_vals.contains(s) or parsed_sym.module_alias != null) {
+                    try bc.instructions.append(self.vm.allocator(), .{ .deref_local = sym });
                 } else {
-                    try bc.instructions.append(self.vm.memory_manager.allocator, .{ .deref_global = sym });
+                    try bc.instructions.append(self.vm.allocator(), .{ .deref_global = sym });
                 }
             }
         },
@@ -140,7 +141,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             try self.addIr(bc, f.function);
             for (f.args) |arg| try self.addIr(bc, arg);
             try bc.instructions.append(
-                self.vm.memory_manager.allocator,
+                self.vm.allocator(),
                 .{ .eval = f.args.len + 1 },
             );
         },
@@ -154,16 +155,16 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             else
                 try self.compileImpl(&[_]*const Ir{&Ir{ .constant = .none }});
             try bc.instructions.append(
-                self.vm.memory_manager.allocator,
+                self.vm.allocator(),
                 .{ .jump_if = false_bc.instructions.items.len + 1 },
             );
-            try bc.instructions.appendSlice(self.vm.memory_manager.allocator, false_bc.instructions.items);
+            try bc.instructions.appendSlice(self.vm.allocator(), false_bc.instructions.items);
             false_bc.instructions.items.len = 0;
             try bc.instructions.append(
-                self.vm.memory_manager.allocator,
+                self.vm.allocator(),
                 .{ .jump = true_bc.instructions.items.len },
             );
-            try bc.instructions.appendSlice(self.vm.memory_manager.allocator, true_bc.instructions.items);
+            try bc.instructions.appendSlice(self.vm.allocator(), true_bc.instructions.items);
             true_bc.instructions.items.len = 0;
         },
         .lambda => |l| {
@@ -171,15 +172,15 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             defer self.args = old_args;
             self.args = l.args;
             const lambda_bc = try self.compileImpl(l.exprs);
-            try lambda_bc.instructions.append(self.vm.memory_manager.allocator, .ret);
+            try lambda_bc.instructions.append(self.vm.allocator(), .ret);
             try bc.instructions.append(
-                self.vm.memory_manager.allocator,
+                self.vm.allocator(),
                 .{ .push_const = .{ .bytecode = lambda_bc } },
             );
         },
         .ret => |r| {
             for (r.exprs) |e| try self.addIr(bc, e);
-            try bc.instructions.append(self.vm.memory_manager.allocator, .ret);
+            try bc.instructions.append(self.vm.allocator(), .ret);
         },
     }
 }

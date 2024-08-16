@@ -5,17 +5,26 @@ const Module = @import("Module.zig");
 
 const std = @import("std");
 
+/// The allocator used by all managed data.
 allocator: std.mem.Allocator,
+/// The color to tag all data that is reachable as opposed to unreachable. Unreachable data is
+/// cleaned up for garbage collection.
 reachable_color: Color,
+/// A map from an owned string to its reachable color.
 strings: std.StringHashMapUnmanaged(Color),
+/// A map from an owned list pointer to its length and color.
 lists: std.AutoHashMapUnmanaged([*]Val, LenAndColor),
+/// A map from a bytecode pointer to its color.
 bytecode: std.AutoHashMapUnmanaged(*ByteCode, Color),
 
+/// Stores a length and a color.
 const LenAndColor = struct {
     len: usize,
     color: Color,
 };
 
+/// Labels data with a color. Used for tagging data is reachable or unreachable for garbage
+/// collection purposes.
 const Color = enum {
     red,
     blue,
@@ -28,6 +37,7 @@ const Color = enum {
     }
 };
 
+/// Initialize a new memory manager.
 pub fn init(allocator: std.mem.Allocator) MemoryManager {
     return .{
         .allocator = allocator,
@@ -38,6 +48,7 @@ pub fn init(allocator: std.mem.Allocator) MemoryManager {
     };
 }
 
+/// Deinitialize a memory manager.
 pub fn deinit(self: *MemoryManager) void {
     self.sweep() catch {};
     self.sweep() catch {};
@@ -46,6 +57,9 @@ pub fn deinit(self: *MemoryManager) void {
     self.bytecode.deinit(self.allocator);
 }
 
+/// Allocate a new string to be managed by the memory manager. If an equivalent string already
+/// exists, it is returned instead. If not, then `str` is duplicated and added to the pool of
+/// managed strings.
 pub fn allocateString(self: *MemoryManager, str: []const u8) ![]const u8 {
     if (self.strings.getEntry(str)) |entry| {
         return entry.key_ptr.*;
@@ -55,14 +69,17 @@ pub fn allocateString(self: *MemoryManager, str: []const u8) ![]const u8 {
     return str_copy;
 }
 
+/// Create a new managed string `Val` from `str`.
 pub fn allocateStringVal(self: *MemoryManager, str: []const u8) !Val {
     return .{ .string = try self.allocateString(str) };
 }
 
+/// Create a new managed symbol `Val` from `sym`.
 pub fn allocateSymbolVal(self: *MemoryManager, sym: []const u8) !Val {
     return .{ .symbol = try self.allocateString(sym) };
 }
 
+/// Allocate a new list of size `len`. All elements within the slice are uninitialized.
 pub fn allocateUninitializedList(self: *MemoryManager, len: usize) ![]Val {
     if (len == 0) {
         return &[0]Val{};
@@ -72,6 +89,7 @@ pub fn allocateUninitializedList(self: *MemoryManager, len: usize) ![]Val {
     return lst;
 }
 
+/// Allocate a new managed slice of `Val` duplicating that duplicates the values in `contents`.
 pub fn allocateList(self: *MemoryManager, contents: []const Val) ![]Val {
     if (contents.len == 0) {
         return &[0]Val{};
@@ -81,10 +99,12 @@ pub fn allocateList(self: *MemoryManager, contents: []const Val) ![]Val {
     return lst;
 }
 
+/// Allocate a new `Val` of type list that duplicates `contents`.
 pub fn allocateListVal(self: *MemoryManager, contents: []const Val) !Val {
     return .{ .list = try self.allocateList(contents) };
 }
 
+/// Allocate a new bytecode object.
 pub fn allocateByteCode(self: *MemoryManager, module: *Module) !*ByteCode {
     const bc = try self.allocator.create(ByteCode);
     try self.bytecode.put(self.allocator, bc, self.reachable_color);
@@ -97,6 +117,7 @@ pub fn allocateByteCode(self: *MemoryManager, module: *Module) !*ByteCode {
     return bc;
 }
 
+/// Mark a single value as reachable.
 pub fn markVal(self: *MemoryManager, v: Val) !void {
     switch (v) {
         .string => |s| try self.strings.put(self.allocator, s, self.reachable_color),
@@ -124,6 +145,11 @@ pub fn markVal(self: *MemoryManager, v: Val) !void {
     }
 }
 
+/// Sweep all values that are unreachable and reset the color marking. For garbage collection, you
+/// typically want to:
+///   1. Call `self.markVal` on all reachable `Val` objects.
+///   2. Call `self.sweep()` to garbage collect.
+///   3. Repeat.
 pub fn sweep(self: *MemoryManager) !void {
     var strings_iter = self.strings.iterator();
     while (strings_iter.next()) |entry| {
