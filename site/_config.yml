@@ -1,0 +1,17 @@
+# Demo with: bundle exec jekyll serve
+title: Fizz
+email: will.s.medrano@gmail.com
+description: >- 
+  The fizz programming language.
+baseurl: "/" # the subpath of your site, e.g. /blog
+url: "https://wmedrano.github.io/fizz"
+github_username:  wmedrano
+theme: just-the-docs
+mermaid:
+  src: 'https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js'
+plugins:
+  - jekyll-feed
+  - jekyll-mermaid
+aux_links:
+  "GitHub":
+    - "https://github.com/wmedrano/fizz"

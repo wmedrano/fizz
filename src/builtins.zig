@@ -9,9 +9,9 @@ pub fn registerAll(vm: *Vm) !void {
     try vm.global_module.setVal(vm, "%modules%", .{ .native_fn = .{ .impl = modules } });
     try vm.global_module.setVal(vm, "apply", .{ .native_fn = .{ .impl = apply } });
     try vm.global_module.setVal(vm, "list", .{ .native_fn = .{ .impl = list } });
+    try vm.global_module.setVal(vm, "len", .{ .native_fn = .{ .impl = len } });
     try vm.global_module.setVal(vm, "first", .{ .native_fn = .{ .impl = first } });
     try vm.global_module.setVal(vm, "rest", .{ .native_fn = .{ .impl = rest } });
-    try vm.global_module.setVal(vm, "len", .{ .native_fn = .{ .impl = len } });
     try vm.global_module.setVal(vm, "+", .{ .native_fn = .{ .impl = add } });
     try vm.global_module.setVal(vm, "-", .{ .native_fn = .{ .impl = subtract } });
     try vm.global_module.setVal(vm, "*", .{ .native_fn = .{ .impl = multiply } });
