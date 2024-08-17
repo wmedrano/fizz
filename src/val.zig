@@ -1,6 +1,6 @@
 const std = @import("std");
 const ByteCode = @import("ByteCode.zig");
-const Vm = @import("Vm.zig");
+const Environment = @import("Environment.zig");
 
 pub const Val = union(enum) {
     none,
@@ -22,7 +22,7 @@ pub const Val = union(enum) {
             RuntimeError,
         };
 
-        impl: *const fn (*Vm, []const Val) Error!Val,
+        impl: *const fn (*Environment, []const Val) Error!Val,
     };
 
     pub const empty_list: Val = Val{ .list = &[0]Val{} };

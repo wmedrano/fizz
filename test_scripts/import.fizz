@@ -1,0 +1,3 @@
+(import "geometry.fizz")
+
+(define two-pi (* 2 geometry/pi))

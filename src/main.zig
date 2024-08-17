@@ -27,11 +27,17 @@ fn runScript(writer: anytype, script_contents: []const u8, require_determinism: 
         try runAst(ir_arena.allocator(), writer, &vm, &expr_number, &node);
         _ = ir_arena.reset(.retain_capacity);
     }
-    if (!require_determinism) try writer.print("gc_duration: {d}ns\n", .{vm.runtime_stats.gc_duration_nanos});
+    if (!require_determinism) {
+        try writer.print("gc_duration: {d}ns\n", .{vm.env.runtime_stats.gc_duration_nanos});
+    }
 }
 
 fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *Vm, expr_number: *usize, ast: *const Ast.Node) !void {
-    var compiler = try Compiler.initModule(allocator, vm, try vm.getOrCreateModule("%test%"));
+    var compiler = try Compiler.initModule(
+        allocator,
+        &vm.env,
+        try vm.env.getOrCreateModule(.{ .name = "%test%" }),
+    );
     defer compiler.deinit();
     const ir = try Ir.init(allocator, &[1]Ast.Node{ast.*});
     defer ir.deinit(allocator);
@@ -41,7 +47,7 @@ fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *Vm, expr_number: *
         try writer.print("${d}: {any}\n", .{ expr_number.*, res });
         expr_number.* += 1;
     }
-    try vm.runGc();
+    try vm.env.runGc();
 }
 
 test "simple input" {

@@ -1,62 +1,62 @@
 const Val = @import("val.zig").Val;
-const Vm = @import("Vm.zig");
+const Environment = @import("Environment.zig");
 const ByteCode = @import("ByteCode.zig");
 const Error = Val.NativeFn.Error;
 const std = @import("std");
 
-pub fn registerAll(vm: *Vm) !void {
-    try vm.global_module.setVal(vm, "%define%", .{ .native_fn = .{ .impl = define } });
-    try vm.global_module.setVal(vm, "%modules%", .{ .native_fn = .{ .impl = modules } });
-    try vm.global_module.setVal(vm, "apply", .{ .native_fn = .{ .impl = apply } });
-    try vm.global_module.setVal(vm, "list", .{ .native_fn = .{ .impl = list } });
-    try vm.global_module.setVal(vm, "len", .{ .native_fn = .{ .impl = len } });
-    try vm.global_module.setVal(vm, "first", .{ .native_fn = .{ .impl = first } });
-    try vm.global_module.setVal(vm, "rest", .{ .native_fn = .{ .impl = rest } });
-    try vm.global_module.setVal(vm, "+", .{ .native_fn = .{ .impl = add } });
-    try vm.global_module.setVal(vm, "-", .{ .native_fn = .{ .impl = subtract } });
-    try vm.global_module.setVal(vm, "*", .{ .native_fn = .{ .impl = multiply } });
-    try vm.global_module.setVal(vm, "/", .{ .native_fn = .{ .impl = divide } });
-    try vm.global_module.setVal(vm, "<", .{ .native_fn = .{ .impl = less } });
-    try vm.global_module.setVal(vm, "<=", .{ .native_fn = .{ .impl = lessEq } });
-    try vm.global_module.setVal(vm, ">", .{ .native_fn = .{ .impl = greater } });
-    try vm.global_module.setVal(vm, ">=", .{ .native_fn = .{ .impl = greaterEq } });
+pub fn registerAll(env: *Environment) !void {
+    try env.global_module.setVal(env, "%define%", .{ .native_fn = .{ .impl = define } });
+    try env.global_module.setVal(env, "%modules%", .{ .native_fn = .{ .impl = modules } });
+    try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
+    try env.global_module.setVal(env, "list", .{ .native_fn = .{ .impl = list } });
+    try env.global_module.setVal(env, "len", .{ .native_fn = .{ .impl = len } });
+    try env.global_module.setVal(env, "first", .{ .native_fn = .{ .impl = first } });
+    try env.global_module.setVal(env, "rest", .{ .native_fn = .{ .impl = rest } });
+    try env.global_module.setVal(env, "+", .{ .native_fn = .{ .impl = add } });
+    try env.global_module.setVal(env, "-", .{ .native_fn = .{ .impl = subtract } });
+    try env.global_module.setVal(env, "*", .{ .native_fn = .{ .impl = multiply } });
+    try env.global_module.setVal(env, "/", .{ .native_fn = .{ .impl = divide } });
+    try env.global_module.setVal(env, "<", .{ .native_fn = .{ .impl = less } });
+    try env.global_module.setVal(env, "<=", .{ .native_fn = .{ .impl = lessEq } });
+    try env.global_module.setVal(env, ">", .{ .native_fn = .{ .impl = greater } });
+    try env.global_module.setVal(env, ">=", .{ .native_fn = .{ .impl = greaterEq } });
 }
 
-fn define(vm: *Vm, vals: []const Val) Error!Val {
+fn define(env: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
-    const module = vm.frames.items[vm.frames.items.len - 1].bytecode.module;
+    const module = env.frames.items[env.frames.items.len - 1].bytecode.module;
     switch (vals[0]) {
         .symbol => |s| {
-            module.setVal(vm, s, vals[1]) catch return Error.RuntimeError;
+            module.setVal(env, s, vals[1]) catch return Error.RuntimeError;
         },
         else => return Error.TypeError,
     }
     return .none;
 }
 
-fn modules(vm: *Vm, vals: []const Val) Error!Val {
+fn modules(env: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 0) return Error.ArrityError;
-    const module_count = 1 + vm.modules.count();
-    var ret = vm.memory_manager.allocateUninitializedList(module_count) catch return Error.RuntimeError;
-    ret[0] = vm.memory_manager.allocateStringVal(vm.global_module.name) catch return Error.RuntimeError;
+    const module_count = 1 + env.modules.count();
+    var ret = env.memory_manager.allocateUninitializedList(module_count) catch return Error.RuntimeError;
+    ret[0] = env.memory_manager.allocateStringVal(env.global_module.name) catch return Error.RuntimeError;
 
-    var modules_iter = vm.modules.keyIterator();
+    var modules_iter = env.modules.keyIterator();
     var idx: usize = 0;
     while (modules_iter.next()) |m| {
         idx += 1;
-        ret[idx] = vm.memory_manager.allocateStringVal(m.*) catch return Error.RuntimeError;
+        ret[idx] = env.memory_manager.allocateStringVal(m.*) catch return Error.RuntimeError;
     }
 
     return .{ .list = ret };
 }
 
-fn apply(vm: *Vm, vals: []const Val) Error!Val {
+fn apply(env: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
     const args = switch (vals[1]) {
         .list => |lst| lst,
         else => return Error.TypeError,
     };
-    const res = vm.eval(vals[0], args) catch |err| switch (err) {
+    const res = env.evalNoReset(vals[0], args) catch |err| switch (err) {
         Error.ArrityError => return Error.ArrityError,
         Error.RuntimeError => return Error.RuntimeError,
         Error.TypeError => return Error.TypeError,
@@ -65,11 +65,11 @@ fn apply(vm: *Vm, vals: []const Val) Error!Val {
     return res;
 }
 
-fn list(vm: *Vm, vals: []const Val) Error!Val {
-    return vm.memory_manager.allocateListVal(vals) catch return Error.RuntimeError;
+fn list(env: *Environment, vals: []const Val) Error!Val {
+    return env.memory_manager.allocateListVal(vals) catch return Error.RuntimeError;
 }
 
-fn first(_: *Vm, vals: []const Val) Error!Val {
+fn first(_: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => |lst| return lst[0],
@@ -77,18 +77,18 @@ fn first(_: *Vm, vals: []const Val) Error!Val {
     }
 }
 
-fn rest(vm: *Vm, vals: []const Val) Error!Val {
+fn rest(env: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => |lst| {
             if (lst.len == 0) return Error.RuntimeError;
-            return vm.memory_manager.allocateListVal(lst[1..]) catch return Error.RuntimeError;
+            return env.memory_manager.allocateListVal(lst[1..]) catch return Error.RuntimeError;
         },
         else => return Error.TypeError,
     }
 }
 
-fn len(_: *Vm, vals: []const Val) Error!Val {
+fn len(_: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => |lst| return .{ .int = @intCast(lst.len) },
@@ -96,7 +96,7 @@ fn len(_: *Vm, vals: []const Val) Error!Val {
     }
 }
 
-fn add(_: *Vm, vals: []const Val) Error!Val {
+fn add(_: *Environment, vals: []const Val) Error!Val {
     var int_sum: i64 = 0;
     var float_sum: f64 = 0.0;
     var has_float = false;
@@ -124,18 +124,18 @@ fn negate(v: Val) Error!Val {
     }
 }
 
-fn subtract(vm: *Vm, vals: []const Val) Error!Val {
+fn subtract(env: *Environment, vals: []const Val) Error!Val {
     switch (vals.len) {
         0 => return error.ArrityError,
         1 => return try negate(vals[0]),
         else => {
-            const neg = try negate(try add(vm, vals[1..]));
-            return try add(vm, &[2]Val{ vals[0], neg });
+            const neg = try negate(try add(env, vals[1..]));
+            return try add(env, &[2]Val{ vals[0], neg });
         },
     }
 }
 
-fn multiply(_: *Vm, vals: []const Val) Error!Val {
+fn multiply(_: *Environment, vals: []const Val) Error!Val {
     var int_product: i64 = 1;
     var float_product: f64 = 1.0;
     var has_float = false;
@@ -163,13 +163,13 @@ fn reciprocal(v: Val) Error!Val {
     }
 }
 
-fn divide(vm: *Vm, vals: []const Val) Error!Val {
+fn divide(env: *Environment, vals: []const Val) Error!Val {
     switch (vals.len) {
         0 => return error.ArrityError,
         1 => return try reciprocal(vals[0]),
         else => {
-            const divisor = try multiply(vm, vals[1..]);
-            return try multiply(vm, &[2]Val{
+            const divisor = try multiply(env, vals[1..]);
+            return try multiply(env, &[2]Val{
                 vals[0],
                 try reciprocal(divisor),
             });
@@ -198,7 +198,7 @@ fn numbersAreOrdered(vals: []const Val, comptime pred: fn (a: anytype, b: anytyp
     return true;
 }
 
-fn less(_: *Vm, vals: []const Val) Error!Val {
+fn less(_: *Environment, vals: []const Val) Error!Val {
     const impl = struct {
         fn pred(a: anytype, b: anytype) bool {
             return a < b;
@@ -207,7 +207,7 @@ fn less(_: *Vm, vals: []const Val) Error!Val {
     return .{ .boolean = try numbersAreOrdered(vals, impl.pred) };
 }
 
-fn lessEq(_: *Vm, vals: []const Val) Error!Val {
+fn lessEq(_: *Environment, vals: []const Val) Error!Val {
     const impl = struct {
         fn pred(a: anytype, b: anytype) bool {
             return a <= b;
@@ -216,7 +216,7 @@ fn lessEq(_: *Vm, vals: []const Val) Error!Val {
     return .{ .boolean = try numbersAreOrdered(vals, impl.pred) };
 }
 
-fn greater(_: *Vm, vals: []const Val) Error!Val {
+fn greater(_: *Environment, vals: []const Val) Error!Val {
     const impl = struct {
         fn pred(a: anytype, b: anytype) bool {
             return a > b;
@@ -225,7 +225,7 @@ fn greater(_: *Vm, vals: []const Val) Error!Val {
     return .{ .boolean = try numbersAreOrdered(vals, impl.pred) };
 }
 
-fn greaterEq(_: *Vm, vals: []const Val) Error!Val {
+fn greaterEq(_: *Environment, vals: []const Val) Error!Val {
     const impl = struct {
         fn pred(a: anytype, b: anytype) bool {
             return a >= b;
@@ -235,7 +235,7 @@ fn greaterEq(_: *Vm, vals: []const Val) Error!Val {
 }
 
 test "register_all does not fail" {
-    var vm = try Vm.init(std.testing.allocator);
-    try registerAll(&vm);
-    defer vm.deinit();
+    var env = try Environment.init(std.testing.allocator);
+    try registerAll(&env);
+    defer env.deinit();
 }

@@ -13,6 +13,25 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // Command: zig build check
+    //
+    // Run a build without completing the fool exe_build. This is a workaround, a more stable
+    // solution is tracked at https://github.com/ziglang/zig/issues/18877
+    const check_exe = b.addExecutable(.{
+        .name = "fizz",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const check_test = b.addTest(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const check_step = b.step("check", "Check for compile errors");
+    check_step.dependOn(&check_exe.step);
+    check_step.dependOn(&check_test.step);
+
     // Command: zig build run
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

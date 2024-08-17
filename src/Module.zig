@@ -1,7 +1,7 @@
 const Module = @This();
 
+const Environment = @import("Environment.zig");
 const Val = @import("val.zig").Val;
-const Vm = @import("Vm.zig");
 const iter = @import("iter.zig");
 const std = @import("std");
 
@@ -13,11 +13,17 @@ values: std.StringHashMapUnmanaged(Val) = .{},
 /// Map from alias to module that this module has access to.
 alias_to_module: std.StringHashMapUnmanaged(*Module),
 
+pub const Builder = struct {
+    pub const default_name = "%default%";
+    /// The name of the module. If the module is backed by a file, then this should be the filename.
+    name: []const u8 = default_name,
+};
+
 /// Initialize an empty module with the given name.
-pub fn init(allocator: std.mem.Allocator, name: []const u8) !*Module {
+pub fn init(allocator: std.mem.Allocator, b: Builder) !*Module {
     const module = try allocator.create(Module);
     module.* = .{
-        .name = try allocator.dupe(u8, name),
+        .name = try allocator.dupe(u8, b.name),
         .values = .{},
         .alias_to_module = .{},
     };
@@ -43,9 +49,9 @@ pub fn deinitLocal(self: *Module, allocator: std.mem.Allocator) void {
 }
 
 /// Set a value within the module.
-pub fn setVal(self: *Module, vm: *Vm, sym: []const u8, v: Val) !void {
-    const interned_sym = try vm.memory_manager.allocateString(sym);
-    try self.values.put(vm.allocator(), interned_sym, v);
+pub fn setVal(self: *Module, env: *Environment, sym: []const u8, v: Val) !void {
+    const interned_sym = try env.memory_manager.allocateString(sym);
+    try self.values.put(env.allocator(), interned_sym, v);
 }
 
 /// Get a value within the module.
@@ -55,7 +61,13 @@ pub fn getVal(self: *const Module, sym: []const u8) ?Val {
 
 /// Set a module alias.
 pub fn setModuleAlias(self: *Module, allocator: std.mem.Allocator, alias: []const u8, module: *Module) !void {
-    try self.alias_to_module.put(allocator, try allocator.dupe(u8, alias), module);
+    if (self.alias_to_module.contains(alias)) {
+        try self.alias_to_module.put(allocator, alias, module);
+        return;
+    }
+    const alias_dupe = try allocator.dupe(u8, alias);
+    errdefer allocator.free(alias_dupe);
+    try self.alias_to_module.put(allocator, alias_dupe, module);
 }
 
 /// Get the default name for the alias for a module derived from path.
@@ -118,10 +130,17 @@ pub fn iterateVals(self: *const Module) ValIterator {
     };
 }
 
+/// Get the directory for the module or the working directory if it is a virtual module.
+pub fn directory(self: *const Module) !std.fs.Dir {
+    const dirname = std.fs.path.dirname(self.name);
+    if (dirname) |d| return std.fs.cwd().openDir(d, .{});
+    return std.fs.cwd();
+}
+
 test "can iterate over values" {
-    var vm = try Vm.init(std.testing.allocator);
+    var vm = try Environment.init(std.testing.allocator);
     defer vm.deinit();
-    var module = try Module.init(std.testing.allocator, "%test%");
+    var module = try Module.init(std.testing.allocator, .{});
     defer module.deinit(vm.allocator());
     try module.setVal(&vm, "test-val", .{ .int = 42 });
     var it = module.iterateVals();
@@ -131,6 +150,17 @@ test "can iterate over values" {
         &[_]Val{ .{ .int = 42 }, .{ .symbol = "test-val" } },
         actual,
     );
+}
+
+test "default module directory is cwd" {
+    var module = try Module.init(std.testing.allocator, .{ .name = "%virtual%" });
+    defer module.deinit(std.testing.allocator);
+    const actual_dir = try module.directory();
+    const actual = try actual_dir.realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(actual);
+    const expected = try std.fs.cwd().realpathAlloc(std.testing.allocator, ".");
+    defer std.testing.allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, actual);
 }
 
 test "default module alias" {
