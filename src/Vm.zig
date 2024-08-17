@@ -1,15 +1,10 @@
 const Vm = @This();
 
-const Ast = @import("Ast.zig");
-const ByteCode = @import("ByteCode.zig");
 const Compiler = @import("Compiler.zig");
 const Environment = @import("Environment.zig");
 const Ir = @import("ir.zig").Ir;
-const MemoryManager = @import("MemoryManager.zig");
 const Module = @import("Module.zig");
 const Val = @import("val.zig").Val;
-const builtins = @import("builtins.zig");
-const iter = @import("iter.zig");
 const std = @import("std");
 
 pub const Error = Environment.Error;
@@ -18,11 +13,9 @@ env: Environment,
 
 /// Create a new virtual machine.
 pub fn init(alloc: std.mem.Allocator) std.mem.Allocator.Error!Vm {
-    var vm = Vm{
+    return Vm{
         .env = try Environment.init(alloc),
     };
-    try builtins.registerAll(&vm.env);
-    return vm;
 }
 
 /// Deinitialize a virtual machine. Using self after calling deinit is invalid.

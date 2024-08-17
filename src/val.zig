@@ -52,14 +52,38 @@ pub const Val = union(enum) {
         return @as(Tag, self);
     }
 
+    /// Returns true if the value is none.
+    pub fn isNone(self: Val) bool {
+        return self.tag() == Tag.none;
+    }
+
+    /// Get the value as a bool.
     pub fn asBool(self: Val) !bool {
         switch (self) {
             .boolean => |b| return b,
             else => return error.TypeError,
         }
     }
+
+    /// Get the value as an int.
+    pub fn asInt(self: Val) !i64 {
+        switch (self) {
+            .int => |i| return i,
+            else => return error.TypeError,
+        }
+    }
+
+    /// Get the value as an f64. Val may be a float or an int.
+    pub fn asFloat(self: Val) !f64 {
+        switch (self) {
+            .float => |f| return f,
+            .int => |i| return @as(f64, @floatFromInt(i)),
+            else => return error.TypeError,
+        }
+    }
 };
 
 test "val size is ok" {
+    // TODO: Reduce the size of val to 2 words.
     try std.testing.expectEqual(3 * @sizeOf(usize), @sizeOf(Val));
 }

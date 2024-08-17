@@ -6,7 +6,6 @@ const Val = @import("val.zig").Val;
 const ByteCode = @import("ByteCode.zig");
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
-const iter = @import("iter.zig");
 const Compiler = @import("Compiler.zig");
 const builtins = @import("builtins.zig");
 const std = @import("std");
@@ -77,6 +76,65 @@ pub fn deinit(self: *Environment) void {
 /// Get the memory allocator used for all `Val`.
 pub fn allocator(self: *const Environment) std.mem.Allocator {
     return self.memory_manager.allocator;
+}
+
+/// Convert the val into a Zig value.
+pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: Val) !T {
+    if (T == void) {
+        if (!val.isNone()) return error.TypeError;
+        return;
+    }
+    if (T == bool) return val.asBool();
+    if (T == i64) return val.asInt();
+    if (T == f64) return val.asFloat();
+    if (T == []u8) {
+        switch (val) {
+            .string => |s| return try alloc.dupe(u8, s),
+            else => return error.TypeError,
+        }
+    }
+    switch (@typeInfo(T)) {
+        .Pointer => |info| {
+            switch (info.size) {
+                .One => @compileError("Val.toZig does not support pointers"),
+                .Slice => switch (val) {
+                    .list => |lst| {
+                        var ret = try alloc.alloc(info.child, lst.len);
+                        var init_count: usize = 0;
+                        errdefer toZigClean(T, alloc, ret[0..init_count]);
+                        for (0..lst.len) |idx| {
+                            ret[idx] = try self.toZig(info.child, alloc, lst[idx]);
+                            init_count += 1;
+                        }
+                        return ret;
+                    },
+                    else => return error.TypeError,
+                },
+                .Many => @compileError("Val.toZig does not support Many pointers"),
+                .C => @compileError("Val.toZig does not support C pointers."),
+            }
+        },
+        else => {
+            @compileError("Val.toZig called with unsupported Zig type.");
+        },
+    }
+}
+
+fn toZigClean(T: type, alloc: std.mem.Allocator, v: T) void {
+    if (T == void or T == bool or T == i64 or T == f64) return;
+    if (T == []u8) {
+        alloc.free(v);
+    }
+    switch (@typeInfo(T)) {
+        .Pointer => |info| switch (info.size) {
+            .Slice => {
+                for (v) |item| toZigClean(info.child, alloc, item);
+                alloc.free(v);
+            },
+            else => @compileError("Unreachable"),
+        },
+        else => @compileError("Unreachable"),
+    }
 }
 
 /// Run the garbage collector to free up memory.
@@ -284,4 +342,25 @@ fn executeImportModule(self: *Environment, module: *Module, module_path: []const
     _ = try self.evalNoReset(try module_bytecode, &.{});
     module_ok = true;
     try module.setModuleAlias(self.allocator(), module_alias, new_module);
+}
+
+test "can convert to zig val" {
+    var env = try init(std.testing.allocator);
+    defer env.deinit();
+
+    try std.testing.expectEqual(false, env.toZig(bool, std.testing.allocator, .{ .boolean = false }));
+    try std.testing.expectEqual(42, env.toZig(i64, std.testing.allocator, .{ .int = 42 }));
+    try env.toZig(void, std.testing.allocator, .none);
+
+    const actual_str = try env.toZig([]u8, std.testing.allocator, .{ .string = "string" });
+    defer std.testing.allocator.free(actual_str);
+    try std.testing.expectEqualStrings("string", actual_str);
+
+    const actual_int_list = try env.toZig(
+        []i64,
+        std.testing.allocator,
+        Val{ .list = @constCast(&[_]Val{ Val{ .int = 1 }, Val{ .int = 2 } }) },
+    );
+    defer std.testing.allocator.free(actual_int_list);
+    try std.testing.expectEqualDeep(&[_]i64{ 1, 2 }, actual_int_list);
 }
