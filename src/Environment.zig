@@ -101,7 +101,7 @@ pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: V
                     .list => |lst| {
                         var ret = try alloc.alloc(info.child, lst.len);
                         var init_count: usize = 0;
-                        errdefer toZigClean(T, alloc, ret[0..init_count]);
+                        errdefer toZigClean(T, alloc, ret, init_count);
                         for (0..lst.len) |idx| {
                             ret[idx] = try self.toZig(info.child, alloc, lst[idx]);
                             init_count += 1;
@@ -120,20 +120,29 @@ pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: V
     }
 }
 
-fn toZigClean(T: type, alloc: std.mem.Allocator, v: T) void {
+// T - The type that will be cleaned up.
+// alloc - The allocator used to allocate said values.
+// v - The object to deallocate.
+// slice_init_count - If v is a slice, then this is the number of elements that were initialized or
+//   `null` to deallocate all the elements.
+fn toZigClean(T: type, alloc: std.mem.Allocator, v: T, slice_init_count: ?usize) void {
     if (T == void or T == bool or T == i64 or T == f64) return;
     if (T == []u8) {
         alloc.free(v);
+        return;
     }
     switch (@typeInfo(T)) {
         .Pointer => |info| switch (info.size) {
             .Slice => {
-                for (v) |item| toZigClean(info.child, alloc, item);
+                const slice = if (slice_init_count) |n| v[0..n] else v;
+                for (slice) |item| toZigClean(info.child, alloc, item, null);
                 alloc.free(v);
             },
             else => @compileError("Unreachable"),
         },
-        else => @compileError("Unreachable"),
+        else => {
+            @compileError(@typeName(T));
+        },
     }
 }
 
@@ -188,10 +197,20 @@ pub fn registerModule(self: *Environment, module: *Module) !void {
 
 /// Delete a module.
 pub fn deleteModule(self: *Environment, module: *Module) !void {
-    if (self.modules.getEntry(module.name)) |m| {
-        if (m.value_ptr.* != module) return error.ModuleDoesNotMatchRegisteredModule;
-        m.value_ptr.*.deinit(self.allocator());
-        self.modules.removeByPtr(m.key_ptr);
+    if (self.modules.getEntry(module.name)) |found_module| {
+        if (found_module.value_ptr.* != module) return error.ModuleDoesNotMatchRegisteredModule;
+        var modules_iter = self.modules.valueIterator();
+        while (modules_iter.next()) |any_m| {
+            if (any_m.* == module) continue;
+            var aliases_iter = any_m.*.alias_to_module.iterator();
+            while (aliases_iter.next()) |alias| {
+                if (alias.value_ptr.* == module) {
+                    any_m.*.alias_to_module.removeByPtr(alias.key_ptr);
+                }
+            }
+        }
+        module.deinit(self.allocator());
+        self.modules.removeByPtr(found_module.key_ptr);
     }
     return error.ModuleDoesNotExist;
 }
@@ -363,4 +382,42 @@ test "can convert to zig val" {
     );
     defer std.testing.allocator.free(actual_int_list);
     try std.testing.expectEqualDeep(&[_]i64{ 1, 2 }, actual_int_list);
+
+    const actual_float_list_list = try env.toZig(
+        [][]f64,
+        std.testing.allocator,
+        Val{ .list = @constCast(
+            &[_]Val{
+                Val{ .list = @constCast(&[_]Val{ .{ .float = 1.0 }, .{ .float = 2.0 } }) },
+                Val{ .list = @constCast(&[_]Val{ .{ .float = 3.0 }, .{ .float = 4.0 } }) },
+            },
+        ) },
+    );
+    defer std.testing.allocator.free(actual_float_list_list);
+    defer for (actual_float_list_list) |lst| std.testing.allocator.free(lst);
+    try std.testing.expectEqualDeep(
+        &[_][]const f64{
+            &[_]f64{ 1.0, 2.0 },
+            &[_]f64{ 3.0, 4.0 },
+        },
+        actual_float_list_list,
+    );
+}
+
+test "can't convert list of heterogenous types" {
+    var env = try init(std.testing.allocator);
+    defer env.deinit();
+    try std.testing.expectError(
+        error.TypeError,
+        env.toZig(
+            [][]u8,
+            std.testing.allocator,
+            Val{ .list = @constCast(
+                &[_]Val{
+                    Val{ .list = @constCast(&[_]Val{ .{ .string = "good" }, .{ .string = "also good" } }) },
+                    Val{ .list = @constCast(&[_]Val{ .{ .string = "still good" }, .{ .symbol = "bad" } }) },
+                },
+            ) },
+        ),
+    );
 }
