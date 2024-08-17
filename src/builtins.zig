@@ -8,6 +8,7 @@ pub fn registerAll(env: *Environment) !void {
     try env.global_module.setVal(env, "%define%", .{ .native_fn = .{ .impl = define } });
     try env.global_module.setVal(env, "%modules%", .{ .native_fn = .{ .impl = modules } });
     try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
+    try env.global_module.setVal(env, "->string", .{ .native_fn = .{ .impl = toString } });
     try env.global_module.setVal(env, "list", .{ .native_fn = .{ .impl = list } });
     try env.global_module.setVal(env, "len", .{ .native_fn = .{ .impl = len } });
     try env.global_module.setVal(env, "first", .{ .native_fn = .{ .impl = first } });
@@ -63,6 +64,39 @@ fn apply(env: *Environment, vals: []const Val) Error!Val {
         else => return Error.RuntimeError,
     };
     return res;
+}
+
+fn toStringImpl(buff: *std.ArrayList(u8), val: Val) !void {
+    switch (val) {
+        .none => try buff.appendSlice("none"),
+        .boolean => |b| try buff.appendSlice(if (b) "true" else "false"),
+        .int => |i| try std.fmt.format(buff.writer(), "{d}", .{i}),
+        .float => |f| try std.fmt.format(buff.writer(), "{d}", .{f}),
+        .string => |s| try buff.appendSlice(s),
+        .symbol => |s| try std.fmt.format(buff.writer(), "'{s}", .{s}),
+        .list => |lst| {
+            try buff.appendSlice("(");
+            for (lst, 0..) |v, idx| {
+                if (idx > 0) try buff.appendSlice(" ");
+                try toStringImpl(buff, v);
+            }
+            try buff.appendSlice(")");
+        },
+        .bytecode => |bc| try std.fmt.format(
+            buff.writer(),
+            "<function {s}>",
+            .{if (bc.name.len == 0) "_" else bc.name},
+        ),
+        .native_fn => |nf| try std.fmt.format(buff.writer(), "<native-func #{d}>", .{@intFromPtr(nf.impl)}),
+    }
+}
+
+fn toString(env: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 1) return Error.ArrityError;
+    var buff = std.ArrayList(u8).init(env.allocator());
+    defer buff.deinit();
+    toStringImpl(&buff, vals[0]) catch return Error.RuntimeError;
+    return env.memory_manager.allocateStringVal(buff.items) catch return Error.RuntimeError;
 }
 
 fn list(env: *Environment, vals: []const Val) Error!Val {

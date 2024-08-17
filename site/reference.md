@@ -41,6 +41,17 @@ $1 = 10
 $2 = 10
 ```
 
+### ->string
+
+Convert any type to its string representation.
+
+```lisp
+>> (->string "string")
+$1 = "string"
+>> (->string 1)
+$2 = "1"
+```
+
 ## Numbers
 
 ### + - * /

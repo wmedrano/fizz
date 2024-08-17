@@ -111,9 +111,9 @@ test "can only deref symbols from the same module" {
     defer vm.deinit();
     try (try vm.env.getOrCreateModule(.{}))
         .setVal(&vm.env, "test", try vm.env.memory_manager.allocateStringVal("test-val"));
-    try std.testing.expectEqualDeep(
-        Val{ .string = @constCast("test-val") },
-        try vm.evalStr(std.testing.allocator, .{}, "test"),
+    try std.testing.expectEqualStrings(
+        "test-val",
+        (try vm.evalStr(std.testing.allocator, .{}, "test")).string,
     );
     try std.testing.expectError(
         error.SymbolNotFound,
@@ -147,5 +147,26 @@ test "import bad file fails" {
     try std.testing.expectError(
         error.TypeError,
         vm.evalStr(std.testing.allocator, .{}, "(import \"test_scripts/fail.fizz\")"),
+    );
+}
+
+test "->string" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    try std.testing.expectEqualStrings(
+        "4",
+        (try vm.evalStr(std.testing.allocator, .{}, "(->string 4)")).string,
+    );
+    try std.testing.expectEqualStrings(
+        "cat",
+        (try vm.evalStr(std.testing.allocator, .{}, "(->string \"cat\")")).string,
+    );
+    try std.testing.expectEqualStrings(
+        "<function _>",
+        (try vm.evalStr(std.testing.allocator, .{}, "(->string (lambda () 4))")).string,
+    );
+    try std.testing.expectEqualStrings(
+        "(1 2 <function _>)",
+        (try vm.evalStr(std.testing.allocator, .{}, "(->string (list 1 2 (lambda () 4)))")).string,
     );
 }
