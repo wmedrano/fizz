@@ -15,7 +15,7 @@
     (if (< n 2) n
       (+ (fib (- n 1)) (fib (- n 2))))))
 
-(fib 25)
+(fib 30)
 
 (import "/dev/null")
 (%modules%)

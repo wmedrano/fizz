@@ -11,7 +11,11 @@ pub fn main() !void {
     try runScript(stdout.writer(), input, false);
 }
 
-fn runScript(writer: anytype, script_contents: []const u8, require_determinism: bool) !void {
+fn runScript(
+    writer: anytype,
+    script_contents: []const u8,
+    require_determinism: bool,
+) !void {
     var base_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = base_allocator.allocator();
     var vm = try Vm.init(allocator);

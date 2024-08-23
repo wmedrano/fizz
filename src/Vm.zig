@@ -54,6 +54,17 @@ pub fn allocator(self: *const Vm) std.mem.Allocator {
     return self.env.allocator();
 }
 
+// Tests the example code from site/index.md.
+test "index.md example test" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    _ = try vm.evalStr(std.testing.allocator, .{}, "(define args (list 1 2 3 4))");
+    const v = try vm.evalStr(std.testing.allocator, .{}, "args");
+    const actual = try vm.env.toZig([]i64, std.testing.allocator, v);
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
+}
+
 test "can eval basic expression" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();

@@ -522,8 +522,11 @@ test "define on lambda produces named function" {
     }, actual);
 }
 
-test "nested lambda with error produces error" {
-    try std.testing.expectError(Ir.Error.SyntaxError, Ir.initStrExpr(std.testing.allocator, "(define foo (lambda () (lambda ())))"));
+test "nested badly formed lambda produces error" {
+    try std.testing.expectError(
+        Ir.Error.SyntaxError,
+        Ir.initStrExpr(std.testing.allocator, "(define foo (lambda () (lambda ())))"),
+    );
 }
 
 test "definedVals visits all defined values" {
