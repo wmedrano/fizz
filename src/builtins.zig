@@ -14,6 +14,7 @@ pub fn registerAll(env: *Environment) !void {
     try env.global_module.setVal(env, "str-concat", .{ .native_fn = .{ .impl = strConcat } });
     try env.global_module.setVal(env, "str-substr", .{ .native_fn = .{ .impl = strSubstr } });
     try env.global_module.setVal(env, "struct", .{ .native_fn = .{ .impl = makeStruct } });
+    try env.global_module.setVal(env, "struct-set!", .{ .native_fn = .{ .impl = structSet } });
     try env.global_module.setVal(env, "struct-get", .{ .native_fn = .{ .impl = structGet } });
     try env.global_module.setVal(env, "list", .{ .native_fn = .{ .impl = list } });
     try env.global_module.setVal(env, "len", .{ .native_fn = .{ .impl = len } });
@@ -227,6 +228,26 @@ fn makeStruct(env: *Environment, vals: []const Val) Error!Val {
         }
     }
     return .{ .structV = fields };
+}
+
+fn structSet(env: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 3) return Error.ArrityError;
+    const map = switch (vals[0]) {
+        .structV => |m| m,
+        else => return Error.TypeError,
+    };
+    const sym = switch (vals[1]) {
+        .symbol => |s| s,
+        else => return Error.TypeError,
+    };
+    if (map.getKey(sym)) |k| {
+        map.put(env.allocator(), k, vals[2]) catch return Error.RuntimeError;
+        return .none;
+    }
+    const sym_key = env.allocator().dupe(u8, sym) catch return Error.RuntimeError;
+    errdefer env.allocator().free(sym_key);
+    map.put(env.allocator(), sym_key, vals[2]) catch return Error.RuntimeError;
+    return .none;
 }
 
 fn structGet(_: *Environment, vals: []const Val) Error!Val {

@@ -181,6 +181,19 @@ $1 = (struct)
 $2 = (struct id 0 message "hello world!")
 ```
 
+### struct-set!
+
+`(struct-set! <struct> <symbol> <value>)`
+
+Set the value of a struct field.
+
+```lisp
+>> (define x (struct 'id 0 'message "hello world!")
+>> (struct-set x 'id 100)
+>> x
+$1 = (struct 'id 100 'message "hello world!")
+```
+
 ### struct-get
 
 Get the value of a struct field.

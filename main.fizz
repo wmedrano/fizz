@@ -35,7 +35,9 @@ test-str
 
 "------------------------------------------------------------"
 "test structs"
-(define test-struct (struct 'hello "world"))
+(define test-struct (struct 'id 0 'hello "world"))
+test-struct
+(struct-set! test-struct 'id 100)
 test-struct
 (struct-get test-struct 'hello)
 
