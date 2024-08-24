@@ -39,23 +39,6 @@ $2 = 4
 $3 = 0
 ```
 
-### =
-
-`(= <a> <b>)`
-
-Returns true if 2 values are equal.
-
-```lisp
->> (= 1 1)
-$1 = true
->> (= 1 1.0)
-$1 = false
->> (= 1 2)
-$2 = false
->> (= "text" (str-concat (list "te" "xt")))
-$3 = true
-```
-
 ### if
 
 `(if <pred> <true-branch> <optional-false-branch>)`
@@ -71,10 +54,26 @@ $2 = "false"
 >> (if false "true")
 ```
 
+### =
+
+`(= <a> <b>)`
+
+Returns true if the two values are equal.
+
+```lisp
+>> (= 1 1)
+$1 = true
+>> (= 1 1.0)
+$1 = false
+>> (= 1 2)
+$2 = false
+>> (= "text" (str-concat (list "te" "xt")))
+$3 = true
+```
 
 ### apply
 
-`(apply <fn> <args-list>)` - Applies `<fn>` by assing in the `args-list`.
+`(apply <fn> <args-list>)` - Applies `<fn>` by passing in the `args-list`.
 
 ```lisp
 >> (+ 1 2 3 4)
@@ -83,15 +82,15 @@ $1 = 10
 $2 = 10
 ```
 
-### %modules%
+### \*modules\*
 
-`(%modules%)`
+`(*modules*)`
 
 Get all the available modules as a list of strings.
 
 ```lisp
 >> (modules)
-$1 = ("%global%" "my-module.fizz")
+$1 = ("*global*" "my-module.fizz")
 ```
 
 
@@ -238,6 +237,21 @@ Create a new list with any number of elements.
 $1 = ()
 >> (list 1 1.1 "hello" (list true))
 $2 = (1 1.1 "hello" (true))
+```
+
+### list?
+
+`(list? <value>)`
+
+Returns true if the argument is a list.
+
+```lisp
+>> (list? (list))
+$1 = true
+>> (list? (list 1 2 3))
+$2 = true
+>> (list? "123")
+$3 = false
 ```
 
 ### len

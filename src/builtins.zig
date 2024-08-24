@@ -5,8 +5,8 @@ const Error = Val.NativeFn.Error;
 const std = @import("std");
 
 pub fn registerAll(env: *Environment) !void {
-    try env.global_module.setVal(env, "%define%", .{ .native_fn = .{ .impl = define } });
-    try env.global_module.setVal(env, "%modules%", .{ .native_fn = .{ .impl = modules } });
+    try env.global_module.setVal(env, "*define*", .{ .native_fn = .{ .impl = define } });
+    try env.global_module.setVal(env, "*modules*", .{ .native_fn = .{ .impl = modules } });
     try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
     try env.global_module.setVal(env, "->str", .{ .native_fn = .{ .impl = toStr } });
     try env.global_module.setVal(env, "=", .{ .native_fn = .{ .impl = equal } });
@@ -17,6 +17,7 @@ pub fn registerAll(env: *Environment) !void {
     try env.global_module.setVal(env, "struct-set!", .{ .native_fn = .{ .impl = structSet } });
     try env.global_module.setVal(env, "struct-get", .{ .native_fn = .{ .impl = structGet } });
     try env.global_module.setVal(env, "list", .{ .native_fn = .{ .impl = list } });
+    try env.global_module.setVal(env, "list?", .{ .native_fn = .{ .impl = listPred } });
     try env.global_module.setVal(env, "len", .{ .native_fn = .{ .impl = len } });
     try env.global_module.setVal(env, "first", .{ .native_fn = .{ .impl = first } });
     try env.global_module.setVal(env, "rest", .{ .native_fn = .{ .impl = rest } });
@@ -266,6 +267,14 @@ fn structGet(_: *Environment, vals: []const Val) Error!Val {
 
 fn list(env: *Environment, vals: []const Val) Error!Val {
     return env.memory_manager.allocateListVal(vals) catch return Error.RuntimeError;
+}
+
+fn listPred(_: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 1) return Error.ArrityError;
+    switch (vals[0]) {
+        .list => return .{ .boolean = true },
+        else => return .{ .boolean = false },
+    }
 }
 
 fn first(_: *Environment, vals: []const Val) Error!Val {

@@ -32,7 +32,7 @@ const Frame = struct {
 };
 
 /// The name of the global module.
-pub const global_module_name = "%global%";
+pub const global_module_name = "*global*";
 
 /// Create a new virtual machine.
 pub fn init(alloc: std.mem.Allocator) std.mem.Allocator.Error!Environment {

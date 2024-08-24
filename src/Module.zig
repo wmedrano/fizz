@@ -14,7 +14,7 @@ values: std.StringHashMapUnmanaged(Val) = .{},
 alias_to_module: std.StringHashMapUnmanaged(*Module),
 
 pub const Builder = struct {
-    pub const default_name = "%default%";
+    pub const default_name = "*default*";
     /// The name of the module. If the module is backed by a file, then this should be the filename.
     name: []const u8 = default_name,
 };
@@ -153,7 +153,7 @@ test "can iterate over values" {
 }
 
 test "default module directory is cwd" {
-    var module = try Module.init(std.testing.allocator, .{ .name = "%virtual%" });
+    var module = try Module.init(std.testing.allocator, .{ .name = "*virtual*" });
     defer module.deinit(std.testing.allocator);
     const actual_dir = try module.directory();
     const actual = try actual_dir.realpathAlloc(std.testing.allocator, ".");
@@ -164,7 +164,7 @@ test "default module directory is cwd" {
 }
 
 test "default module alias" {
-    try std.testing.expectEqualStrings("%global%", defaultModuleAlias("%global%"));
+    try std.testing.expectEqualStrings("*global*", defaultModuleAlias("*global*"));
     try std.testing.expectEqualStrings("module", defaultModuleAlias("module.fizz"));
     try std.testing.expectEqualStrings("module", defaultModuleAlias("my/module.fizz"));
 }

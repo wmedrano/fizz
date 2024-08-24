@@ -28,7 +28,7 @@ pub fn deinit(self: *Vm) void {
 ///
 /// tmp_allocator - An allocator to use for parsing and compiling expr. The data will automatically
 ///   be freed by evalStr.
-/// module - The module to run the expression in or "%default%" if null.
+/// module - The module to run the expression in or "*default*" if null.
 /// expr - The fizz expression to evaluate.
 ///
 /// Note: The returned Val is only valid until the next garbage collection call.
@@ -153,7 +153,7 @@ test "recursive function can eval" {
 test "can only deref symbols from the same module" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    try (try vm.env.getOrCreateModule(.{ .name = "%other%" }))
+    try (try vm.env.getOrCreateModule(.{ .name = "*other*" }))
         .setVal(&vm.env, "test", try vm.env.memory_manager.allocateStringVal("test-val"));
     try std.testing.expectError(
         error.SymbolNotFound,

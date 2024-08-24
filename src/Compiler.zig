@@ -103,7 +103,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             }
             try bc.instructions.append(
                 self.env.allocator(),
-                .{ .push_const = self.env.global_module.getVal("%define%") orelse @panic("builtin %define% not available") },
+                .{ .push_const = self.env.global_module.getVal("*define*") orelse @panic("builtin *define* not available") },
             );
             try bc.instructions.append(
                 self.env.allocator(),
@@ -281,11 +281,11 @@ test "module with define expressions" {
             .arg_count = 0,
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{
-                    .{ .push_const = vm.global_module.getVal("%define%").? },
+                    .{ .push_const = vm.global_module.getVal("*define*").? },
                     .{ .push_const = try vm.memory_manager.allocateSymbolVal("pi") },
                     .{ .push_const = .{ .float = 3.14 } },
                     .{ .eval = 3 },
-                    .{ .push_const = vm.global_module.getVal("%define%").? },
+                    .{ .push_const = vm.global_module.getVal("*define*").? },
                     .{ .push_const = try vm.memory_manager.allocateSymbolVal("e") },
                     .{ .push_const = .{ .float = 2.718 } },
                     .{ .eval = 3 },

@@ -40,7 +40,7 @@ fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *Vm, expr_number: *
     var compiler = try Compiler.initModule(
         allocator,
         &vm.env,
-        try vm.env.getOrCreateModule(.{ .name = "%test%" }),
+        try vm.env.getOrCreateModule(.{ .name = "*test*" }),
     );
     defer compiler.deinit();
     const ir = try Ir.init(allocator, &[1]Ast.Node{ast.*});
@@ -57,13 +57,13 @@ fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *Vm, expr_number: *
 test "simple input" {
     var actual = std.ArrayList(u8).init(std.testing.allocator);
     defer actual.deinit();
-    try runScript(actual.writer(), "(+ 1 2) (- 3.0 4.0) (< 1 2) (list \"hello\" 42) (%modules%)", true);
+    try runScript(actual.writer(), "(+ 1 2) (- 3.0 4.0) (< 1 2) (list \"hello\" 42) (*modules*)", true);
     try std.testing.expectEqualStrings(
         \\$1: 3
         \\$2: -1
         \\$3: true
         \\$4: ("hello" 42)
-        \\$5: ("%global%" "%test%")
+        \\$5: ("*global*" "*test*")
         \\
     , actual.items);
 }
