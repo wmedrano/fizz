@@ -1,3 +1,4 @@
+"test functions"
 (define pi 3.14)
 (define circle-area
   (lambda (radius)
@@ -5,17 +6,26 @@
 (circle-area 100)
 (circle-area 100.0)
 
+"test lists"
 (define lst (list 1 2 3 4))
 (first lst)
 (rest lst)
 (rest (rest lst))
+(nth lst 3)
 
+
+"test structs"
+(define test-struct (struct 'hello "world"))
+test-struct
+(struct-get test-struct 'hello)
+
+"test fib"
 (define fib
   (lambda (n)
     (if (< n 2) n
       (+ (fib (- n 1)) (fib (- n 2))))))
+(fib 25)
 
-(fib 30)
-
+"test modules"
 (import "/dev/null")
 (%modules%)

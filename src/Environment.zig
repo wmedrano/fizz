@@ -289,7 +289,9 @@ fn executePushConst(self: *Environment, v: Val) !void {
 }
 
 fn executeDeref(self: *Environment, module: *const Module, sym: []const u8) Error!void {
-    const v = module.getVal(sym) orelse return Error.SymbolNotFound;
+    const v = module.getVal(sym) orelse {
+        return Error.SymbolNotFound;
+    };
     try self.stack.append(self.allocator(), v);
 }
 

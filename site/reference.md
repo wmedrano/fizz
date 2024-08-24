@@ -90,6 +90,29 @@ $2 = true
 $3 = false
 ```
 
+## Struct
+
+### struct
+
+Create a new struct. Takes pairs of symbol, values.
+
+```lisp
+>> (struct)
+$1 = (struct)
+>> (struct 'id 0 'message "hello world!")
+$2 = (struct id 0 message "hello world!")
+```
+
+### struct-get
+
+Get the value of a struct field.
+
+```lisp
+>> (define x (struct 'id 0 'message "hello world!")
+>> (struct-get x 'message)
+$1 = "hello world"
+```
+
 ## Lists
 
 ### list
@@ -132,4 +155,14 @@ Create a list that contains all elements except the first one.
 $1 = ()
 >> (rest (list 1 2 3))
 $2 = (2 3)
+```
+
+### nth
+
+Get the nth element of a list based on the index. Fails if `idx` is greater or
+equal to the length of the list.
+
+```lisp
+>> (nth (list 0 1 2 3) 2)
+$1 = 2
 ```

@@ -10,6 +10,7 @@ pub const Val = union(enum) {
     string: []const u8,
     symbol: []const u8,
     list: []Val,
+    structV: *std.StringHashMapUnmanaged(Val),
     bytecode: *ByteCode,
     native_fn: NativeFn,
 
@@ -35,6 +36,17 @@ pub const Val = union(enum) {
             .float => |v| try writer.print("{d}", .{v}),
             .string => |v| try writer.print("\"{s}\"", .{v}),
             .symbol => |v| try writer.print("'{s}", .{v}),
+            .structV => |map| {
+                var iter = map.iterator();
+                try writer.print("(struct", .{});
+                while (iter.next()) |v| {
+                    try writer.print(" ", .{});
+                    try writer.print("'{s}", .{v.key_ptr.*});
+                    try writer.print(" ", .{});
+                    try writer.print("{any}", .{v.value_ptr.*});
+                }
+                try writer.print(")", .{});
+            },
             .list => |lst| {
                 try writer.print("(", .{});
                 for (lst, 0..lst.len) |v, idx| {

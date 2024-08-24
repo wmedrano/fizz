@@ -181,3 +181,31 @@ test "->string" {
         (try vm.evalStr(std.testing.allocator, .{}, "(->string (list 1 2 (lambda () 4)))")).string,
     );
 }
+
+test "struct can build and get" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    (try vm.evalStr(std.testing.allocator, .{}, "(define x (struct 'id 0 'message \"hello world\"))")).none;
+    try std.testing.expectEqual(
+        0,
+        (try vm.evalStr(std.testing.allocator, .{}, "(struct-get x 'id)")).int,
+    );
+    try std.testing.expectEqualStrings(
+        "hello world",
+        (try vm.evalStr(std.testing.allocator, .{}, "(struct-get x 'message)")).string,
+    );
+    try std.testing.expectError(
+        error.RuntimeError,
+        vm.evalStr(std.testing.allocator, .{}, "(struct-get x 'does-not-exist)"),
+    );
+}
+
+test "struct get with nonexistant field fails" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    (try vm.evalStr(std.testing.allocator, .{}, "(define x (struct 'id 0 'message \"hello world\"))")).none;
+    try std.testing.expectError(
+        error.RuntimeError,
+        vm.evalStr(std.testing.allocator, .{}, "(struct-get x 'does-not-exist)"),
+    );
+}

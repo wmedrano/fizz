@@ -12,6 +12,8 @@ allocator: std.mem.Allocator,
 reachable_color: Color,
 /// A map from an owned string to its reachable color.
 strings: std.StringHashMapUnmanaged(Color),
+/// A map from a struct pointer to its Color.
+structs: std.AutoHashMapUnmanaged(*std.StringHashMapUnmanaged(Val), Color),
 /// A map from an owned list pointer to its length and color.
 lists: std.AutoHashMapUnmanaged([*]Val, LenAndColor),
 /// A map from a bytecode pointer to its color.
@@ -43,6 +45,7 @@ pub fn init(allocator: std.mem.Allocator) MemoryManager {
         .allocator = allocator,
         .reachable_color = Color.red,
         .strings = .{},
+        .structs = .{},
         .lists = .{},
         .bytecode = .{},
     };
@@ -53,6 +56,7 @@ pub fn deinit(self: *MemoryManager) void {
     self.sweep() catch {};
     self.sweep() catch {};
     self.strings.deinit(self.allocator);
+    self.structs.deinit(self.allocator);
     self.lists.deinit(self.allocator);
     self.bytecode.deinit(self.allocator);
 }
@@ -117,11 +121,27 @@ pub fn allocateByteCode(self: *MemoryManager, module: *Module) !*ByteCode {
     return bc;
 }
 
+/// Allocate a new empty struct.
+pub fn allocateStruct(self: *MemoryManager) !*std.StringHashMapUnmanaged(Val) {
+    const m = try self.allocator.create(std.StringHashMapUnmanaged(Val));
+    errdefer self.allocator.destroy(m);
+    m.* = .{};
+    try self.structs.put(self.allocator, m, self.reachable_color);
+    return m;
+}
+
 /// Mark a single value as reachable.
 pub fn markVal(self: *MemoryManager, v: Val) !void {
     switch (v) {
         .string => |s| try self.strings.put(self.allocator, s, self.reachable_color),
         .symbol => |s| try self.strings.put(self.allocator, s, self.reachable_color),
+        .structV => |s| {
+            try self.structs.put(self.allocator, s, self.reachable_color);
+            var iter = s.valueIterator();
+            while (iter.next()) |structVal| {
+                try self.markVal(structVal.*);
+            }
+        },
         .list => |lst| {
             if (self.lists.getEntry(lst.ptr)) |entry| {
                 if (entry.value_ptr.color == self.reachable_color) return;
@@ -151,30 +171,62 @@ pub fn markVal(self: *MemoryManager, v: Val) !void {
 ///   2. Call `self.sweep()` to garbage collect.
 ///   3. Repeat.
 pub fn sweep(self: *MemoryManager) !void {
+    var tmp_arena = std.heap.ArenaAllocator.init(self.allocator);
+    defer tmp_arena.deinit();
+
+    var string_free_targets = std.ArrayList([]const u8).init(tmp_arena.allocator());
     var strings_iter = self.strings.iterator();
     while (strings_iter.next()) |entry| {
         if (entry.value_ptr.* != self.reachable_color) {
-            self.allocator.free(entry.key_ptr.*);
-            self.strings.removeByPtr(entry.key_ptr);
+            try string_free_targets.append(entry.key_ptr.*);
         }
     }
+    for (string_free_targets.items) |s| {
+        _ = self.strings.remove(s);
+        self.allocator.free(s);
+    }
+    _ = tmp_arena.reset(.retain_capacity);
 
+    var list_free_targets = std.ArrayList([*]Val).init(tmp_arena.allocator());
     var lists_iter = self.lists.iterator();
     while (lists_iter.next()) |entry| {
         if (entry.value_ptr.color != self.reachable_color) {
             const lst = entry.key_ptr.*[0..entry.value_ptr.len];
             self.allocator.free(lst);
-            self.lists.removeByPtr(entry.key_ptr);
+            try list_free_targets.append(entry.key_ptr.*);
         }
     }
+    for (list_free_targets.items) |t| _ = self.lists.remove(t);
+    _ = tmp_arena.reset(.retain_capacity);
 
+    var struct_free_targets = std.ArrayList(*std.StringHashMapUnmanaged(Val)).init(tmp_arena.allocator());
+    var structsIter = self.structs.iterator();
+    while (structsIter.next()) |entry| {
+        if (entry.value_ptr.* != self.reachable_color) {
+            try struct_free_targets.append(entry.key_ptr.*);
+            var fieldsIter = entry.key_ptr.*.iterator();
+            while (fieldsIter.next()) |field| {
+                self.allocator.free(field.key_ptr.*);
+            }
+        }
+    }
+    for (struct_free_targets.items) |t| {
+        _ = self.structs.remove(t);
+        t.*.deinit(self.allocator);
+        self.allocator.destroy(t);
+    }
+    _ = tmp_arena.reset(.retain_capacity);
+
+    var bytecode_free_targets = std.ArrayList(*ByteCode).init(tmp_arena.allocator());
     var bytecode_iter = self.bytecode.iterator();
     while (bytecode_iter.next()) |entry| {
         if (entry.value_ptr.* != self.reachable_color) {
             ByteCode.deinit(entry.key_ptr.*, self.allocator);
-            self.bytecode.removeByPtr(entry.key_ptr);
+            try bytecode_free_targets.append(entry.key_ptr.*);
         }
     }
+    for (bytecode_free_targets.items) |bc| _ = self.bytecode.remove(bc);
+    _ = tmp_arena.reset(.retain_capacity);
 
     self.reachable_color = self.reachable_color.swap();
 }

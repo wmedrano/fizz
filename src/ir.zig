@@ -213,7 +213,10 @@ const IrBuilder = struct {
     fn buildLeaf(self: *IrBuilder, leaf: *const Ast.Node.Leaf) Error!*Ir {
         const v = switch (leaf.*) {
             .keyword => return Error.SyntaxError,
-            .identifier => |ident| return self.buildDeref(ident),
+            .identifier => |ident| if (ident.len != 0 and ident[0] == 39)
+                Ir.Const{ .symbol = ident[1..] }
+            else
+                return self.buildDeref(ident),
             .string => |s| Ir.Const{ .string = s },
             .boolean => Ir.Const{ .boolean = leaf.boolean },
             .int => Ir.Const{ .int = leaf.int },

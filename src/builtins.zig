@@ -9,10 +9,13 @@ pub fn registerAll(env: *Environment) !void {
     try env.global_module.setVal(env, "%modules%", .{ .native_fn = .{ .impl = modules } });
     try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
     try env.global_module.setVal(env, "->string", .{ .native_fn = .{ .impl = toString } });
+    try env.global_module.setVal(env, "struct", .{ .native_fn = .{ .impl = makeStruct } });
+    try env.global_module.setVal(env, "struct-get", .{ .native_fn = .{ .impl = structGet } });
     try env.global_module.setVal(env, "list", .{ .native_fn = .{ .impl = list } });
     try env.global_module.setVal(env, "len", .{ .native_fn = .{ .impl = len } });
     try env.global_module.setVal(env, "first", .{ .native_fn = .{ .impl = first } });
     try env.global_module.setVal(env, "rest", .{ .native_fn = .{ .impl = rest } });
+    try env.global_module.setVal(env, "nth", .{ .native_fn = .{ .impl = nth } });
     try env.global_module.setVal(env, "+", .{ .native_fn = .{ .impl = add } });
     try env.global_module.setVal(env, "-", .{ .native_fn = .{ .impl = subtract } });
     try env.global_module.setVal(env, "*", .{ .native_fn = .{ .impl = multiply } });
@@ -82,6 +85,17 @@ fn toStringImpl(buff: *std.ArrayList(u8), val: Val) !void {
             }
             try buff.appendSlice(")");
         },
+        .structV => |map| {
+            var iter = map.iterator();
+            try buff.appendSlice("(struct");
+            while (iter.next()) |v| {
+                try buff.appendSlice(" ");
+                try buff.appendSlice(v.key_ptr.*);
+                try buff.appendSlice(" ");
+                try toStringImpl(buff, v.value_ptr.*);
+            }
+            try buff.appendSlice(")");
+        },
         .bytecode => |bc| try std.fmt.format(
             buff.writer(),
             "<function {s}>",
@@ -97,6 +111,46 @@ fn toString(env: *Environment, vals: []const Val) Error!Val {
     defer buff.deinit();
     toStringImpl(&buff, vals[0]) catch return Error.RuntimeError;
     return env.memory_manager.allocateStringVal(buff.items) catch return Error.RuntimeError;
+}
+
+fn makeStruct(env: *Environment, vals: []const Val) Error!Val {
+    const field_count = vals.len / 2;
+    if (field_count * 2 != vals.len) return Error.ArrityError;
+    for (0..field_count) |idx| {
+        switch (vals[idx * 2]) {
+            .symbol => {},
+            else => return Error.TypeError,
+        }
+    }
+    const fields = env.memory_manager.allocateStruct() catch return Error.RuntimeError;
+    fields.ensureTotalCapacity(env.allocator(), @intCast(field_count)) catch return Error.RuntimeError;
+    for (0..field_count) |idx| {
+        const name_idx = idx * 2;
+        const val_idx = name_idx + 1;
+        switch (vals[name_idx]) {
+            .symbol => |s| {
+                const k = env.allocator().dupe(u8, s) catch return Error.RuntimeError;
+                errdefer env.allocator().free(k);
+                fields.put(env.allocator(), k, vals[val_idx]) catch return Error.RuntimeError;
+            },
+            else => unreachable,
+        }
+    }
+    return .{ .structV = fields };
+}
+
+fn structGet(_: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 2) return Error.ArrityError;
+    const map = switch (vals[0]) {
+        .structV => |m| m,
+        else => return Error.TypeError,
+    };
+    const sym = switch (vals[1]) {
+        .symbol => |s| s,
+        else => return Error.TypeError,
+    };
+    const v = map.get(sym) orelse return Error.RuntimeError;
+    return v;
 }
 
 fn list(env: *Environment, vals: []const Val) Error!Val {
@@ -120,6 +174,19 @@ fn rest(env: *Environment, vals: []const Val) Error!Val {
         },
         else => return Error.TypeError,
     }
+}
+
+fn nth(_: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 2) return Error.ArrityError;
+    const lst = switch (vals[0]) {
+        .list => |lst| lst,
+        else => return Error.TypeError,
+    };
+    const idx = switch (vals[1]) {
+        .int => |i| i,
+        else => return Error.TypeError,
+    };
+    if (idx < lst.len) return lst[@intCast(idx)] else return Error.RuntimeError;
 }
 
 fn len(_: *Environment, vals: []const Val) Error!Val {
