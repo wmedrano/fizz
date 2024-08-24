@@ -344,6 +344,9 @@ fn executePushConst(self: *Environment, v: Val) !void {
 
 fn executeDeref(self: *Environment, module: *const Module, sym: []const u8) Error!void {
     const v = module.getVal(sym) orelse {
+        // TODO: Design error message mechanism. This is included here for now as Symbol not found
+        // is very common.
+        std.debug.print("Value not defined: {sym}\n", .{sym});
         return Error.SymbolNotFound;
     };
     try self.stack.append(self.allocator(), v);

@@ -9,6 +9,7 @@ nav_order: 2
 
 ## Meta
 
+
 ### define
 
 Define a value within the current module that can be referenced.
@@ -19,6 +20,20 @@ Define a value within the current module that can be referenced.
 >>   (lambda (x) (* x x)))
 >> (square x)
 $1 = 144
+```
+
+### lambda
+
+Lambda is used to define a function.
+
+```lisp
+>> (define my-plus-func (lambda (a b) (+ a b)))
+>> my-plus-func
+$1 = <function >
+>> (my-plus-func 2 2)
+$2 = 4
+>> ((lambda (a b) (- a b)) 2 2)
+$3 = 0
 ```
 
 ### %modules%

@@ -5,9 +5,7 @@ nav_enabled: true
 nav_order: 1
 ---
 
-- TODO: Finish documentation.
-- TODO: Figure out how to use modules from a GitHub repo.
-- TODO: Tag a 0.1.0 Fizz release.
+- TODO: Tag a 0.1.0 Fizz release and figure out how to use modules.
 
 # Zig API
 
@@ -84,3 +82,23 @@ fn doStuff(allocator: std.mem.Allocator, vm: *Vm) !void {
     try vm.runGc();
 }
 ```
+
+## Custom Functions
+
+**Unstable, WIP!**
+
+Custom functions written in Zig may be registered with `Vm.registerGlobalFn` and
+invoked within the VM.
+
+
+```zig
+fn beep(env: *Vm.Environment, args: []const Vm.Val) Vm.NativeFnError!Vm.Val {
+	...
+}
+
+try vm.registerGlobalFn("beep!", beep)
+_ = try vm.evalStr(allocator, "(beep!)")
+```
+
+For some examples, see
+<https://github.com/wmedrano/fizz/blob/main/src/builtins.zig>.

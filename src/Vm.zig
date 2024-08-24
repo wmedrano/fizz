@@ -1,13 +1,14 @@
 const Vm = @This();
 
 const Compiler = @import("Compiler.zig");
-const Environment = @import("Environment.zig");
 const Ir = @import("ir.zig").Ir;
 const Module = @import("Module.zig");
-const Val = @import("val.zig").Val;
 const std = @import("std");
 
+pub const Environment = @import("Environment.zig");
 pub const Error = Environment.Error;
+pub const NativeFnError = Val.NativeFn.Error;
+pub const Val = @import("val.zig").Val;
 
 env: Environment,
 
@@ -47,6 +48,16 @@ pub fn eval(self: *Vm, func: Val, args: []const Val) Error!Val {
     defer self.env.stack.clearRetainingCapacity();
     defer self.env.frames.clearRetainingCapacity();
     return self.env.evalNoReset(func, args);
+}
+
+/// Register a function to the global namespace.
+pub fn registerGlobalFn(
+    self: *Vm,
+    name: []const u8,
+    func: *const fn (*Environment, []const Val) NativeFnError!Val,
+) !void {
+    const func_val = Val{ .native_fn = .{ .impl = func } };
+    try self.env.global_module.setVal(&self.env, name, func_val);
 }
 
 /// Get the memory allocator used to allocate all `Val` types.
