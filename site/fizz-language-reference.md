@@ -41,15 +41,46 @@ $1 = 10
 $2 = 10
 ```
 
-### ->string
+## Strings
+
+### ->str
 
 Convert any type to its string representation.
 
 ```lisp
->> (->string "string")
-$1 = "string"
->> (->string 1)
+>> (->str "string")
+$1 = "str"
+>> (->str 1)
 $2 = "1"
+```
+
+### str-len
+
+Get the length of a string.
+
+```lisp
+>> (str-len "hello world")
+$1 = 11
+>> (str-len "")
+$2 = 0
+```
+
+### str-concat
+
+Concatenate a list of strings.
+
+```lisp
+>> (str-concat (list "hello" " " "world"))
+$1 = "hello world"
+```
+
+### str-substr
+
+Build a string out of a subset of another string.
+
+```lisp
+>> (str-substr "012345" 2 4)
+$1 = "23"
 ```
 
 ## Numbers

@@ -15,6 +15,16 @@ test-define
 (circle-area 100.0)
 
 "------------------------------------------------------------"
+"test strings"
+(define test-str (str-concat (list "0" "1" "23")))
+test-str
+(str-len test-str)
+(str-substr test-str 0 0)
+(str-substr test-str 0 2)
+(str-substr test-str 3 3)
+(str-substr test-str 3 4)
+
+"------------------------------------------------------------"
 "test lists"
 (define lst (list 1 2 3 4))
 (first lst)

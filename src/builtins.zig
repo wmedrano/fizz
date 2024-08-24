@@ -8,7 +8,10 @@ pub fn registerAll(env: *Environment) !void {
     try env.global_module.setVal(env, "%define%", .{ .native_fn = .{ .impl = define } });
     try env.global_module.setVal(env, "%modules%", .{ .native_fn = .{ .impl = modules } });
     try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
-    try env.global_module.setVal(env, "->string", .{ .native_fn = .{ .impl = toString } });
+    try env.global_module.setVal(env, "->str", .{ .native_fn = .{ .impl = toStr } });
+    try env.global_module.setVal(env, "str-len", .{ .native_fn = .{ .impl = strLen } });
+    try env.global_module.setVal(env, "str-concat", .{ .native_fn = .{ .impl = strConcat } });
+    try env.global_module.setVal(env, "str-substr", .{ .native_fn = .{ .impl = strSubstr } });
     try env.global_module.setVal(env, "struct", .{ .native_fn = .{ .impl = makeStruct } });
     try env.global_module.setVal(env, "struct-get", .{ .native_fn = .{ .impl = structGet } });
     try env.global_module.setVal(env, "list", .{ .native_fn = .{ .impl = list } });
@@ -105,12 +108,62 @@ fn toStringImpl(buff: *std.ArrayList(u8), val: Val) !void {
     }
 }
 
-fn toString(env: *Environment, vals: []const Val) Error!Val {
+fn toStr(env: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
     var buff = std.ArrayList(u8).init(env.allocator());
     defer buff.deinit();
     toStringImpl(&buff, vals[0]) catch return Error.RuntimeError;
     return env.memory_manager.allocateStringVal(buff.items) catch return Error.RuntimeError;
+}
+
+fn strLen(_: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 1) return Error.ArrityError;
+    switch (vals[0]) {
+        .string => |s| return Val{ .int = @intCast(s.len) },
+        else => return Error.TypeError,
+    }
+}
+
+fn strConcat(env: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 1) return Error.ArrityError;
+    var buff = std.ArrayList(u8).init(env.allocator());
+    defer buff.deinit();
+    switch (vals[0]) {
+        .list => |lst| {
+            for (lst) |substr| {
+                switch (substr) {
+                    .string => |s| buff.appendSlice(s) catch return Error.RuntimeError,
+                    else => return Error.TypeError,
+                }
+            }
+        },
+        else => return Error.TypeError,
+    }
+    const v = env.memory_manager.allocateStringVal(buff.items) catch return Error.RuntimeError;
+    return v;
+}
+
+fn strSubstr(env: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 3) return Error.ArrityError;
+    const str = switch (vals[0]) {
+        .string => |s| s,
+        else => return Error.TypeError,
+    };
+    const start = switch (vals[1]) {
+        .int => |i| i,
+        else => return Error.TypeError,
+    };
+    if (start < 0 or start >= str.len) return Error.RuntimeError;
+    const end = switch (vals[2]) {
+        .int => |i| i,
+        else => return Error.TypeError,
+    };
+    if (end < start or end > str.len) return Error.RuntimeError;
+    if (start == str.len and start != end) return Error.RuntimeError;
+    if (start == end) return env.memory_manager.allocateStringVal("") catch return Error.RuntimeError;
+    const substr = str[@intCast(start)..@intCast(end)];
+    const v = env.memory_manager.allocateStringVal(substr) catch return Error.RuntimeError;
+    return v;
 }
 
 fn makeStruct(env: *Environment, vals: []const Val) Error!Val {

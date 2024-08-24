@@ -492,12 +492,11 @@ test "can convert to zig struct" {
     var vm = try @import("Vm.zig").init(std.testing.allocator);
     defer vm.deinit();
 
-    _ = try vm.evalStr(std.testing.allocator, .{}, "(define string \"string\")");
-    _ = try vm.evalStr(std.testing.allocator, .{}, "(define lst (list 0 1 2))");
-    _ = try vm.evalStr(std.testing.allocator, .{}, "(define strct (struct 'a-val 1 'b-val 2.0))");
+    _ = try vm.evalStr(std.testing.allocator, "(define string \"string\")");
+    _ = try vm.evalStr(std.testing.allocator, "(define lst (list 0 1 2))");
+    _ = try vm.evalStr(std.testing.allocator, "(define strct (struct 'a-val 1 'b-val 2.0))");
     const v = try vm.evalStr(
         std.testing.allocator,
-        .{},
         "(struct 'string string 'list lst 'strct strct)",
     );
 
@@ -523,11 +522,10 @@ test "partially built struct cleans up" {
     var vm = try @import("Vm.zig").init(std.testing.allocator);
     defer vm.deinit();
 
-    _ = try vm.evalStr(std.testing.allocator, .{}, "(define string \"string\")");
-    _ = try vm.evalStr(std.testing.allocator, .{}, "(define bad-list (list 0 1 2 \"bad\"))");
+    _ = try vm.evalStr(std.testing.allocator, "(define string \"string\")");
+    _ = try vm.evalStr(std.testing.allocator, "(define bad-list (list 0 1 2 \"bad\"))");
     const v = try vm.evalStr(
         std.testing.allocator,
-        .{},
         "(struct 'string string 'list bad-list)",
     );
 

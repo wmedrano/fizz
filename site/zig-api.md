@@ -31,10 +31,9 @@ pub fn main() {
     defer vm.deinit();
 
     // Evaluate an expression.
-    _ = try vm.evalStr(allocator, .{}, "(define magic-numbers (list 1 2 3 4))");
+    _ = try vm.evalStr(allocator, "(define magic-numbers (list 1 2 3 4))");
     const val = try vm.evalStr(
         allocator,
-        .{},
         "(struct 'numbers magic-numbers 'numbers-sum (apply + magic-numbers))",
     );
 
@@ -78,9 +77,9 @@ and must be called manually.
 ```zig
 fn doStuff(allocator: std.mem.Allocator, vm: *Vm) !void {
     // Bind a new list to x.
-    const _ = try vm.evalStr(allocator, .{}, "(define x (list 1 2 3 4))");
+    const _ = try vm.evalStr(allocator, "(define x (list 1 2 3 4))");
     // Bind a new list to x. The previous list will still live in memory.
-    const _ = try vm.evalStr(allocator, .{}, "(define x (list 1 2 3 4))");
+    const _ = try vm.evalStr(allocator, "(define x (list 1 2 3 4))");
     // Run the garbage collector. The unused list will be cleaned up.
     try vm.runGc();
 }

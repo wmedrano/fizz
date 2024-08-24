@@ -31,10 +31,10 @@ pub fn deinit(self: *Vm) void {
 /// expr - The fizz expression to evaluate.
 ///
 /// Note: The returned Val is only valid until the next garbage collection call.
-pub fn evalStr(self: *Vm, tmp_allocator: std.mem.Allocator, module: Module.Builder, expr: []const u8) !Val {
+pub fn evalStr(self: *Vm, tmp_allocator: std.mem.Allocator, expr: []const u8) !Val {
     var ir = try Ir.initStrExpr(tmp_allocator, expr);
     defer ir.deinit(tmp_allocator);
-    var compiler = try Compiler.initModule(tmp_allocator, &self.env, try self.env.getOrCreateModule(module));
+    var compiler = try Compiler.initModule(tmp_allocator, &self.env, try self.env.getOrCreateModule(.{}));
     defer compiler.deinit();
     const bc = try compiler.compile(ir);
     return self.eval(bc, &.{});
@@ -58,8 +58,8 @@ pub fn allocator(self: *const Vm) std.mem.Allocator {
 test "index.md example test" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    _ = try vm.evalStr(std.testing.allocator, .{}, "(define args (list 1 2 3 4))");
-    const v = try vm.evalStr(std.testing.allocator, .{}, "args");
+    _ = try vm.evalStr(std.testing.allocator, "(define args (list 1 2 3 4))");
+    const v = try vm.evalStr(std.testing.allocator, "args");
     const actual = try vm.env.toZig([]i64, std.testing.allocator, v);
     defer std.testing.allocator.free(actual);
     try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
@@ -71,8 +71,8 @@ test "zig-api.md example test" {
     var vm = try Vm.init(alloc);
     defer vm.deinit();
 
-    _ = try vm.evalStr(alloc, .{}, "(define magic-numbers (list 1 2 3 4))");
-    const val = try vm.evalStr(alloc, .{}, "(struct 'numbers magic-numbers 'numbers-sum (apply + magic-numbers))");
+    _ = try vm.evalStr(alloc, "(define magic-numbers (list 1 2 3 4))");
+    const val = try vm.evalStr(alloc, "(struct 'numbers magic-numbers 'numbers-sum (apply + magic-numbers))");
 
     const ResultType = struct { numbers: []const i64, numbers_sum: i64 };
     const result = try vm.env.toZig(
@@ -90,7 +90,7 @@ test "zig-api.md example test" {
 test "can eval basic expression" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr(std.testing.allocator, .{}, "4");
+    const actual = try vm.evalStr(std.testing.allocator, "4");
     try vm.env.runGc();
     try std.testing.expectEqual(Val{ .int = 4 }, actual);
     try std.testing.expectEqual(1, vm.env.runtime_stats.function_calls);
@@ -100,28 +100,28 @@ test "can deref symbols" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
     try vm.env.global_module.setVal(&vm.env, "test", try vm.env.memory_manager.allocateStringVal("test-val"));
-    const actual = try vm.evalStr(std.testing.allocator, .{}, "test");
+    const actual = try vm.evalStr(std.testing.allocator, "test");
     try std.testing.expectEqualDeep(Val{ .string = @constCast("test-val") }, actual);
 }
 
 test "lambda can eval" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr(std.testing.allocator, .{}, "((lambda (x) x) true)");
+    const actual = try vm.evalStr(std.testing.allocator, "((lambda (x) x) true)");
     try std.testing.expectEqualDeep(Val{ .boolean = true }, actual);
 }
 
 test "apply takes native function and list" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr(std.testing.allocator, .{}, "(apply + (list 1 2 3 4))");
+    const actual = try vm.evalStr(std.testing.allocator, "(apply + (list 1 2 3 4))");
     try std.testing.expectEqualDeep(Val{ .int = 10 }, actual);
 }
 
 test "apply takes bytecode function and list" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr(std.testing.allocator, .{}, "(apply (lambda (a b c d) (- 0 a b c d)) (list 1 2 3 4))");
+    const actual = try vm.evalStr(std.testing.allocator, "(apply (lambda (a b c d) (- 0 a b c d)) (list 1 2 3 4))");
     try std.testing.expectEqualDeep(Val{ .int = -10 }, actual);
 }
 
@@ -130,11 +130,11 @@ test "recursive function can eval" {
     defer vm.deinit();
     try std.testing.expectEqualDeep(
         Val.none,
-        try vm.evalStr(std.testing.allocator, .{}, "(define fib (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))"),
+        try vm.evalStr(std.testing.allocator, "(define fib (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))"),
     );
     try std.testing.expectEqualDeep(
         Val{ .int = 55 },
-        try vm.evalStr(std.testing.allocator, .{}, "(fib 10)"),
+        try vm.evalStr(std.testing.allocator, "(fib 10)"),
     );
     try std.testing.expectEqualDeep(621, vm.env.runtime_stats.function_calls);
 }
@@ -142,35 +142,31 @@ test "recursive function can eval" {
 test "can only deref symbols from the same module" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    try (try vm.env.getOrCreateModule(.{}))
+    try (try vm.env.getOrCreateModule(.{ .name = "%other%" }))
         .setVal(&vm.env, "test", try vm.env.memory_manager.allocateStringVal("test-val"));
-    try std.testing.expectEqualStrings(
-        "test-val",
-        (try vm.evalStr(std.testing.allocator, .{}, "test")).string,
-    );
     try std.testing.expectError(
         error.SymbolNotFound,
-        vm.evalStr(std.testing.allocator, .{ .name = "%other%" }, "test"),
+        vm.evalStr(std.testing.allocator, "test"),
     );
 }
 
 test "symbols from imported modules can be referenced" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    _ = try vm.evalStr(std.testing.allocator, .{}, "(import \"test_scripts/geometry.fizz\")");
+    _ = try vm.evalStr(std.testing.allocator, "(import \"test_scripts/geometry.fizz\")");
     try std.testing.expectEqualDeep(
         Val{ .float = 3.14 },
-        try vm.evalStr(std.testing.allocator, .{}, "geometry/pi"),
+        try vm.evalStr(std.testing.allocator, "geometry/pi"),
     );
 }
 
 test "module imports are relative" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    try std.testing.expectEqualDeep(Val.none, vm.evalStr(std.testing.allocator, .{}, "(import \"test_scripts/import.fizz\")"));
+    try std.testing.expectEqualDeep(Val.none, vm.evalStr(std.testing.allocator, "(import \"test_scripts/import.fizz\")"));
     try std.testing.expectEqualDeep(
         Val{ .float = 6.28 },
-        try vm.evalStr(std.testing.allocator, .{}, "import/two-pi"),
+        try vm.evalStr(std.testing.allocator, "import/two-pi"),
     );
 }
 
@@ -179,55 +175,55 @@ test "import bad file fails" {
     defer vm.deinit();
     try std.testing.expectError(
         error.TypeError,
-        vm.evalStr(std.testing.allocator, .{}, "(import \"test_scripts/fail.fizz\")"),
+        vm.evalStr(std.testing.allocator, "(import \"test_scripts/fail.fizz\")"),
     );
 }
 
-test "->string" {
+test "->str" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
     try std.testing.expectEqualStrings(
         "4",
-        (try vm.evalStr(std.testing.allocator, .{}, "(->string 4)")).string,
+        (try vm.evalStr(std.testing.allocator, "(->str 4)")).string,
     );
     try std.testing.expectEqualStrings(
         "cat",
-        (try vm.evalStr(std.testing.allocator, .{}, "(->string \"cat\")")).string,
+        (try vm.evalStr(std.testing.allocator, "(->str \"cat\")")).string,
     );
     try std.testing.expectEqualStrings(
         "<function _>",
-        (try vm.evalStr(std.testing.allocator, .{}, "(->string (lambda () 4))")).string,
+        (try vm.evalStr(std.testing.allocator, "(->str (lambda () 4))")).string,
     );
     try std.testing.expectEqualStrings(
         "(1 2 <function _>)",
-        (try vm.evalStr(std.testing.allocator, .{}, "(->string (list 1 2 (lambda () 4)))")).string,
+        (try vm.evalStr(std.testing.allocator, "(->str (list 1 2 (lambda () 4)))")).string,
     );
 }
 
 test "struct can build and get" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    (try vm.evalStr(std.testing.allocator, .{}, "(define x (struct 'id 0 'message \"hello world\"))")).none;
+    (try vm.evalStr(std.testing.allocator, "(define x (struct 'id 0 'message \"hello world\"))")).none;
     try std.testing.expectEqual(
         0,
-        (try vm.evalStr(std.testing.allocator, .{}, "(struct-get x 'id)")).int,
+        (try vm.evalStr(std.testing.allocator, "(struct-get x 'id)")).int,
     );
     try std.testing.expectEqualStrings(
         "hello world",
-        (try vm.evalStr(std.testing.allocator, .{}, "(struct-get x 'message)")).string,
+        (try vm.evalStr(std.testing.allocator, "(struct-get x 'message)")).string,
     );
     try std.testing.expectError(
         error.RuntimeError,
-        vm.evalStr(std.testing.allocator, .{}, "(struct-get x 'does-not-exist)"),
+        vm.evalStr(std.testing.allocator, "(struct-get x 'does-not-exist)"),
     );
 }
 
 test "struct get with nonexistant field fails" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    (try vm.evalStr(std.testing.allocator, .{}, "(define x (struct 'id 0 'message \"hello world\"))")).none;
+    (try vm.evalStr(std.testing.allocator, "(define x (struct 'id 0 'message \"hello world\"))")).none;
     try std.testing.expectError(
         error.RuntimeError,
-        vm.evalStr(std.testing.allocator, .{}, "(struct-get x 'does-not-exist)"),
+        vm.evalStr(std.testing.allocator, "(struct-get x 'does-not-exist)"),
     );
 }
