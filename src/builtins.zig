@@ -9,6 +9,7 @@ pub fn registerAll(env: *Environment) !void {
     try env.global_module.setVal(env, "%modules%", .{ .native_fn = .{ .impl = modules } });
     try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
     try env.global_module.setVal(env, "->str", .{ .native_fn = .{ .impl = toStr } });
+    try env.global_module.setVal(env, "=", .{ .native_fn = .{ .impl = equal } });
     try env.global_module.setVal(env, "str-len", .{ .native_fn = .{ .impl = strLen } });
     try env.global_module.setVal(env, "str-concat", .{ .native_fn = .{ .impl = strConcat } });
     try env.global_module.setVal(env, "str-substr", .{ .native_fn = .{ .impl = strSubstr } });
@@ -27,6 +28,42 @@ pub fn registerAll(env: *Environment) !void {
     try env.global_module.setVal(env, "<=", .{ .native_fn = .{ .impl = lessEq } });
     try env.global_module.setVal(env, ">", .{ .native_fn = .{ .impl = greater } });
     try env.global_module.setVal(env, ">=", .{ .native_fn = .{ .impl = greaterEq } });
+}
+
+fn equalImpl(a: Val, b: Val) Error!bool {
+    if (a.tag() != b.tag()) return Error.TypeError;
+    switch (a) {
+        .none => return true,
+        .boolean => |x| return x == b.boolean,
+        .int => |x| return x == b.int,
+        .float => |x| return x == b.float,
+        .string => |x| return std.mem.eql(u8, x, b.string),
+        .symbol => |x| return std.mem.eql(u8, x, b.symbol),
+        .list => |x| {
+            if (x.len != b.list.len) return true;
+            for (x, b.list) |a_item, b_item| {
+                if (!try equalImpl(a_item, b_item)) return false;
+            }
+            return true;
+        },
+        .structV => |x| {
+            if (x.count() != b.structV.count()) return false;
+            var iter = x.iterator();
+            while (iter.next()) |a_entry| {
+                const b_val = b.structV.get(a_entry.key_ptr.*) orelse return false;
+                if (!try equalImpl(a_entry.value_ptr.*, b_val)) return false;
+            }
+            return true;
+        },
+        .bytecode => |x| return x == b.bytecode,
+        .native_fn => |x| return x.impl == b.native_fn.impl,
+    }
+}
+
+fn equal(_: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 2) return Error.ArrityError;
+    if (vals[0].tag() != vals[1].tag()) return Error.TypeError;
+    return .{ .boolean = try equalImpl(vals[0], vals[1]) };
 }
 
 fn define(env: *Environment, vals: []const Val) Error!Val {

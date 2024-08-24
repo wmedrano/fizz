@@ -49,6 +49,11 @@ fib
 (fib 25)
 
 "------------------------------------------------------------"
+"test equal"
+(= (list 1 2 (struct 'text "what")) (list 1 2 (struct 'text "what")))
+(= "text" (str-concat (list "te" "xt")))
+
+"------------------------------------------------------------"
 "test modules"
 (import "/dev/null")
 (%modules%)

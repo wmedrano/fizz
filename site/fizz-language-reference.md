@@ -36,14 +36,36 @@ $2 = 4
 $3 = 0
 ```
 
-### %modules%
+### =
 
-Get all the available modules as a list of strings.
+Returns true if 2 values are equal.
 
 ```lisp
->> (modules)
-$1 = ("%global%" "my-module.fizz")
+>> (= 1 1)
+$1 = true
+>> (= 1 1.0)
+$1 = false
+>> (= 1 2)
+$2 = false
+>> (= "text" (str-concat (list "te" "xt")))
+$3 = true
 ```
+
+### if
+
+`(if <pred> <true-branch> <optional-false-branch>)`
+
+Returns the 2nd argument if the predicate is true, or else returns the 3rd
+argument. If the third argument is not present, then it is assumed to be none.
+
+```lisp
+>> (if true "true" "false")
+$1 = "true"
+>> (if false "true" "false")
+$2 = "false"
+>> (if false "true")
+```
+
 
 ### apply
 
@@ -55,6 +77,16 @@ $1 = 10
 >> (apply + (list 1 2 3 4))
 $2 = 10
 ```
+
+### %modules%
+
+Get all the available modules as a list of strings.
+
+```lisp
+>> (modules)
+$1 = ("%global%" "my-module.fizz")
+```
+
 
 ## Strings
 
