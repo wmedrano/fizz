@@ -19,11 +19,11 @@ following tradeoffs may happen:
 
 ## 0.1.0
 
-Status: Feature set implemented. In validation phase.
+Status: Target feature set implemented. In validation phase.
 
 ## 0.2.0
 
-Focus on:
+Will focus on:
 
 - Improved error reporting.
 - Incorporating user feedback.

@@ -134,8 +134,8 @@ pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: V
                 totalFieldsInit = idx;
                 var fizz_field_name: [field.name.len]u8 = undefined;
                 @memcpy(&fizz_field_name, field.name);
+                makeKebabCase(&fizz_field_name);
                 const field_val = map.get(&fizz_field_name) orelse
-                    map.get(makeSnakeCase(&fizz_field_name)) orelse
                     return Error.TypeError;
                 const field_zig_val = try self.toZig(field.type, alloc, field_val);
                 errdefer toZigClean(field.type, alloc, field_zig_val, null);
@@ -150,20 +150,11 @@ pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: V
     }
 }
 
-fn makeSnakeCase(name: []u8) []u8 {
+fn makeKebabCase(name: []u8) void {
     for (name, 0..name.len) |ch, idx| {
         if (ch == '_') name[idx] = '-';
     }
-    return name;
 }
-
-// fn toZigName(comptime name: []const u8) [64]u8 {
-//     var ret: [64]u8 = undefined;
-//     for (name, 0..name.len) |ch, idx| {
-//         if (ch == '-') ret[idx] = '_' else ret[idx] = ch;
-//     }
-//     return ret;
-// }
 
 // T - The type that will be cleaned up.
 // alloc - The allocator used to allocate said values.
@@ -344,9 +335,6 @@ fn executePushConst(self: *Environment, v: Val) !void {
 
 fn executeDeref(self: *Environment, module: *const Module, sym: []const u8) Error!void {
     const v = module.getVal(sym) orelse {
-        // TODO: Design error message mechanism. This is included here for now as Symbol not found
-        // is very common.
-        std.debug.print("Value not defined: {sym}\n", .{sym});
         return Error.SymbolNotFound;
     };
     try self.stack.append(self.allocator(), v);
@@ -435,7 +423,7 @@ test "can convert to zig string" {
     var env = try init(std.testing.allocator);
     defer env.deinit();
 
-    const actual_str = try env.toZig([]u8, std.testing.allocator, .{ .string = "string" });
+    const actual_str = try env.toZig([]const u8, std.testing.allocator, .{ .string = "string" });
     defer std.testing.allocator.free(actual_str);
     try std.testing.expectEqualStrings("string", actual_str);
 }
@@ -516,6 +504,26 @@ test "can convert to zig struct" {
             .string = "string",
             .list = &[_]i64{ 0, 1, 2 },
             .strct = .{ .a_val = 1, .b_val = 2.0 },
+        },
+        actual,
+    );
+}
+
+test "can convert to zig slice of structs" {
+    var vm = try @import("Vm.zig").init(std.testing.allocator);
+    defer vm.deinit();
+
+    _ = try vm.evalStr(std.testing.allocator, "(define x (struct 'a 1 'b 2))");
+    const v = try vm.evalStr(std.testing.allocator, "(list x x x)");
+
+    const TestType = struct { a: i64, b: i64 };
+    const actual = try vm.env.toZig([]const TestType, std.testing.allocator, v);
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualDeep(
+        &[_]TestType{
+            .{ .a = 1, .b = 2 },
+            .{ .a = 1, .b = 2 },
+            .{ .a = 1, .b = 2 },
         },
         actual,
     );

@@ -5,7 +5,8 @@ nav_enabled: true
 nav_order: 1
 ---
 
-- TODO: Tag a 0.1.0 Fizz release and figure out how to use modules.
+{: .todo}
+> Tag a 0.1.0 Fizz release and document how to use it as a module.
 
 # Zig API
 
@@ -13,7 +14,7 @@ nav_order: 1
 
 In the following example, we:
 
-1. Create a virtual machine.
+1. Create the Fizz virtual machine.
 1. Run some code within the virtual machine.
 1. Convert a value into a custom Zig object.
 
@@ -83,9 +84,73 @@ fn doStuff(allocator: std.mem.Allocator, vm: *Vm) !void {
 }
 ```
 
+## Extracting Values
+
+Values are extracted using `vm.env.toZig`.
+
+```zig
+fn toZig(self: *Env, comptime T: type, allocator: Allocator, val: Val) !T
+```
+
+- `self`: A pointer to the environment.
+- `T`: The desired output Zig type.
+- `allocator`: Memory allocator for dynamic memory allocation
+- `val`: The input value to be converted
+
+**Example**
+
+```zig
+fn buildStringInFizz(allocator: std.mem.allocator, vm: *Vm) ![]const u8 {
+   const val = try vm.evalStr(allocator, "(str-concat (list \"hello\" \" \" \"world\"))");
+   const string_val = try vm.env.toZig([]const u8, val);
+   return string_val;
+}
+```
+
+
+### Supported Conversions
+
+- `bool`: Either `true` or `false`.
+- `i64`: Fizz integers.
+- `f64`: Can convert from either a Fizz int or a Fizz float.
+- `void`: Converts from none.
+- `[]u8` or `[]const u8`: Converts from Fizz strings.
+- `[]T` or `[]const T`: Converts from a Fizz list where `T` is a supported conversion.
+  - Supports nested lists (e.g., `[][]f64`).
+- `struct{..}` - Converts from a Fizz struct, (e.g., `(struct 'x 1 'y 2)`).
+
+### Structs
+
+Fizz structs may be parsed as Zig types. Zig types are extracted by field name,
+with the `snake_case` field names mapping to `kebab-case`. For example,
+`my_field` will be derived from `my-field.`
+
+```zig
+const TestType = struct {
+    // Will be derived from `my-string field with a string.
+    my_string: []const u8,
+	// Will be derived from 'my-list field with a list of ints.
+    my_list: []const i64,
+	// Will be derived from 'nested field with the appropriate struct.
+    nested: struct { a: i64, b: f64 },
+};
+
+const src = \\(struct
+\\ 'my-string "hello world!"
+\\ 'my-list   (list 1 2 3 4)
+\\ 'nested (struct 'a 1 'b 2.0)
+\\)
+const complex_val = try vm.evalStr(allocator, src);
+const result = try vm.env.toZig(TestType, allocator, complex_val);
+defer allocator.free(result.my_string);
+defer allocator.free(result.my_list);
+```
+
 ## Custom Functions
 
-**Unstable, WIP!**
+{: .warning}
+> Unstable, WIP! The function signature of custom functions and representation
+> of `Vm.Val` may change.
 
 Custom functions written in Zig may be registered with `Vm.registerGlobalFn` and
 invoked within the VM.

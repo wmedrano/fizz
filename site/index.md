@@ -9,13 +9,15 @@ nav_order: 0
 
 [website](https://wmedrano.github.io/fizz)
 
-Fizz is an interpretted programming language for embedding in Zig. Fizz aims for
-**simplicity** and **Zig integration**.
-Fizz is a **simple** interpretted programming language to **embed in Zig**.
+Fizz is a **simple** interpretted programming language meant for **embedding in
+Zig**.
 
-WARNING: Fizz is not yet in a stable state.
+{: .warning}
+> Fizz is not yet in a stable state.
 
-## Simplicity
+## Goals
+
+### Simplicity
 
 It should be easy to get started writing Fizz. Fizz supports the following:
 
@@ -42,7 +44,7 @@ It should be easy to get started writing Fizz. Fizz supports the following:
  > (my-module/circle-area radius) ;; Reference values with <filename>/<identifier>.
  > ```
 
-## Zig Integration
+### Zig Integration
 
 Fizz is built in Zig and meant to easily integrate into a Zig codebase.
 

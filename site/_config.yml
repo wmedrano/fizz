@@ -15,3 +15,10 @@ plugins:
 aux_links:
   "GitHub":
     - "https://github.com/wmedrano/fizz"
+callouts:
+  todo:
+    title: TODO
+    color: yellow
+  warning:
+    title: Warning
+    color: red

@@ -9,8 +9,9 @@ nav_order: 2
 
 ## Meta
 
-
 ### define
+
+`(define <name> <value>)`
 
 Define a value within the current module that can be referenced.
 
@@ -23,6 +24,8 @@ $1 = 144
 ```
 
 ### lambda
+
+`(lambda (<args...>) <exprs...>)`
 
 Lambda is used to define a function.
 
@@ -37,6 +40,8 @@ $3 = 0
 ```
 
 ### =
+
+`(= <a> <b>)`
 
 Returns true if 2 values are equal.
 
@@ -80,6 +85,8 @@ $2 = 10
 
 ### %modules%
 
+`(%modules%)`
+
 Get all the available modules as a list of strings.
 
 ```lisp
@@ -92,6 +99,8 @@ $1 = ("%global%" "my-module.fizz")
 
 ### ->str
 
+`(->str <val>)`
+
 Convert any type to its string representation.
 
 ```lisp
@@ -102,6 +111,8 @@ $2 = "1"
 ```
 
 ### str-len
+
+`(str-len <str>)`
 
 Get the length of a string.
 
@@ -114,6 +125,8 @@ $2 = 0
 
 ### str-concat
 
+`(str-concat <string-list>)`
+
 Concatenate a list of strings.
 
 ```lisp
@@ -123,7 +136,9 @@ $1 = "hello world"
 
 ### str-substr
 
-Build a string out of a subset of another string.
+`(str-substr <string> <start-inclusive> <end-exclusive>)`
+
+Build a string out of a range from another string.
 
 ```lisp
 >> (str-substr "012345" 2 4)
@@ -154,6 +169,8 @@ $6 = 1.5
 
 ### < <= > >=
 
+`(<operator> <items...>)`
+
 Fizz supports basic number ordering operators. The operators take 0 to any
 number of arguments.
 
@@ -172,6 +189,8 @@ $3 = false
 
 ### struct
 
+`(struct '<name1> <value1> '<name2> <value2> ...)`
+
 Create a new struct. Takes pairs of symbol, values.
 
 ```lisp
@@ -183,7 +202,7 @@ $2 = (struct id 0 message "hello world!")
 
 ### struct-set!
 
-`(struct-set! <struct> <symbol> <value>)`
+`(struct-set! <struct> '<name> <value>)`
 
 Set the value of a struct field.
 
@@ -195,6 +214,8 @@ $1 = (struct 'id 100 'message "hello world!")
 ```
 
 ### struct-get
+
+`(struct-get <struct> '<name>)`
 
 Get the value of a struct field.
 
@@ -208,6 +229,8 @@ $1 = "hello world"
 
 ### list
 
+`(list <items...>)`
+
 Create a new list with any number of elements.
 
 ```lisp
@@ -218,6 +241,8 @@ $2 = (1 1.1 "hello" (true))
 ```
 
 ### len
+
+`(len <list>)`
 
 Get the number of elements in the list.
 
@@ -230,6 +255,8 @@ $2 = 3
 
 ### first
 
+`(first <list>)`
+
 Get the first element of a list.
 
 ```lisp
@@ -238,6 +265,8 @@ $1 = 1
 ```
 
 ### rest
+
+`(rest <list>)`
 
 Create a list that contains all elements except the first one.
 
@@ -249,6 +278,8 @@ $2 = (2 3)
 ```
 
 ### nth
+
+`(nth <list> <index>)`
 
 Get the nth element of a list based on the index. Fails if `idx` is greater or
 equal to the length of the list.
