@@ -1,8 +1,8 @@
 ---
 layout: page
-title: Reference
+title: Fizz Language Reference
 nav_enabled: true
-nav_order: 1
+nav_order: 2
 ---
 
 # Reference

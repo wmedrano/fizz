@@ -79,6 +79,10 @@ pub fn allocator(self: *const Environment) std.mem.Allocator {
 }
 
 /// Convert the val into a Zig value.
+///
+/// T - The type to convert to.
+/// alloc - Allocator used to create strings and slices.
+/// val - The value to convert from.
 pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: Val) !T {
     if (T == void) {
         if (!val.isNone()) return error.TypeError;
@@ -87,7 +91,7 @@ pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: V
     if (T == bool) return val.asBool();
     if (T == i64) return val.asInt();
     if (T == f64) return val.asFloat();
-    if (T == []u8) {
+    if (T == []u8 or T == []const u8) {
         switch (val) {
             .string => |s| return try alloc.dupe(u8, s),
             else => return error.TypeError,
@@ -96,7 +100,7 @@ pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: V
     switch (@typeInfo(T)) {
         .Pointer => |info| {
             switch (info.size) {
-                .One => @compileError("Val.toZig does not support pointers"),
+                .One => @compileError("Val.toZig does not support pointers."),
                 .Slice => switch (val) {
                     .list => |lst| {
                         var ret = try alloc.alloc(info.child, lst.len);
@@ -110,15 +114,56 @@ pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: V
                     },
                     else => return error.TypeError,
                 },
-                .Many => @compileError("Val.toZig does not support Many pointers"),
+                .Many => @compileError("Val.toZig does not support Many pointers."),
                 .C => @compileError("Val.toZig does not support C pointers."),
             }
         },
+        .Struct => |info| {
+            const map = switch (val) {
+                .structV => |m| m,
+                else => return error.TypeError,
+            };
+            var ret: T = undefined;
+            var totalFieldsInit: usize = 0;
+            errdefer inline for (info.fields, 0..info.fields.len) |field, idx| {
+                if (idx < totalFieldsInit) {
+                    toZigClean(field.type, alloc, @field(ret, field.name), null);
+                }
+            };
+            inline for (info.fields, 0..info.fields.len) |field, idx| {
+                totalFieldsInit = idx;
+                var fizz_field_name: [field.name.len]u8 = undefined;
+                @memcpy(&fizz_field_name, field.name);
+                const field_val = map.get(&fizz_field_name) orelse
+                    map.get(makeSnakeCase(&fizz_field_name)) orelse
+                    return Error.TypeError;
+                const field_zig_val = try self.toZig(field.type, alloc, field_val);
+                errdefer toZigClean(field.type, alloc, field_zig_val, null);
+                @field(ret, field.name) = field_zig_val;
+            }
+            return ret;
+        },
         else => {
+            @compileLog("Val.toZig called with type", T);
             @compileError("Val.toZig called with unsupported Zig type.");
         },
     }
 }
+
+fn makeSnakeCase(name: []u8) []u8 {
+    for (name, 0..name.len) |ch, idx| {
+        if (ch == '_') name[idx] = '-';
+    }
+    return name;
+}
+
+// fn toZigName(comptime name: []const u8) [64]u8 {
+//     var ret: [64]u8 = undefined;
+//     for (name, 0..name.len) |ch, idx| {
+//         if (ch == '-') ret[idx] = '_' else ret[idx] = ch;
+//     }
+//     return ret;
+// }
 
 // T - The type that will be cleaned up.
 // alloc - The allocator used to allocate said values.
@@ -127,7 +172,7 @@ pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: V
 //   `null` to deallocate all the elements.
 fn toZigClean(T: type, alloc: std.mem.Allocator, v: T, slice_init_count: ?usize) void {
     if (T == void or T == bool or T == i64 or T == f64) return;
-    if (T == []u8) {
+    if (T == []u8 or T == []const u8) {
         alloc.free(v);
         return;
     }
@@ -138,10 +183,19 @@ fn toZigClean(T: type, alloc: std.mem.Allocator, v: T, slice_init_count: ?usize)
                 for (slice) |item| toZigClean(info.child, alloc, item, null);
                 alloc.free(v);
             },
-            else => @compileError("Unreachable"),
+            else => {
+                @compileLog("Val.toZig called with type", T);
+                @compileError("Val.toZig cleanup for type not implemented.");
+            },
+        },
+        .Struct => |info| {
+            inline for (info.fields) |field| {
+                toZigClean(field.type, alloc, @field(v, field.name), null);
+            }
         },
         else => {
-            @compileError(@typeName(T));
+            @compileLog("Val.toZig called with type", @typeName(T));
+            @compileError("Val.toZig cleanup for type not implemented.");
         },
     }
 }
@@ -372,10 +426,20 @@ test "can convert to zig val" {
     try std.testing.expectEqual(false, env.toZig(bool, std.testing.allocator, .{ .boolean = false }));
     try std.testing.expectEqual(42, env.toZig(i64, std.testing.allocator, .{ .int = 42 }));
     try env.toZig(void, std.testing.allocator, .none);
+}
+
+test "can convert to zig string" {
+    var env = try init(std.testing.allocator);
+    defer env.deinit();
 
     const actual_str = try env.toZig([]u8, std.testing.allocator, .{ .string = "string" });
     defer std.testing.allocator.free(actual_str);
     try std.testing.expectEqualStrings("string", actual_str);
+}
+
+test "can convert to zig slice" {
+    var env = try init(std.testing.allocator);
+    defer env.deinit();
 
     const actual_int_list = try env.toZig(
         []i64,
@@ -421,5 +485,58 @@ test "can't convert list of heterogenous types" {
                 },
             ) },
         ),
+    );
+}
+
+test "can convert to zig struct" {
+    var vm = try @import("Vm.zig").init(std.testing.allocator);
+    defer vm.deinit();
+
+    _ = try vm.evalStr(std.testing.allocator, .{}, "(define string \"string\")");
+    _ = try vm.evalStr(std.testing.allocator, .{}, "(define lst (list 0 1 2))");
+    _ = try vm.evalStr(std.testing.allocator, .{}, "(define strct (struct 'a-val 1 'b-val 2.0))");
+    const v = try vm.evalStr(
+        std.testing.allocator,
+        .{},
+        "(struct 'string string 'list lst 'strct strct)",
+    );
+
+    const TestType = struct {
+        string: []const u8,
+        list: []const i64,
+        strct: struct { a_val: i64, b_val: f64 },
+    };
+    const actual = try vm.env.toZig(TestType, std.testing.allocator, v);
+    defer std.testing.allocator.free(actual.string);
+    defer std.testing.allocator.free(actual.list);
+    try std.testing.expectEqualDeep(
+        TestType{
+            .string = "string",
+            .list = &[_]i64{ 0, 1, 2 },
+            .strct = .{ .a_val = 1, .b_val = 2.0 },
+        },
+        actual,
+    );
+}
+
+test "partially built struct cleans up" {
+    var vm = try @import("Vm.zig").init(std.testing.allocator);
+    defer vm.deinit();
+
+    _ = try vm.evalStr(std.testing.allocator, .{}, "(define string \"string\")");
+    _ = try vm.evalStr(std.testing.allocator, .{}, "(define bad-list (list 0 1 2 \"bad\"))");
+    const v = try vm.evalStr(
+        std.testing.allocator,
+        .{},
+        "(struct 'string string 'list bad-list)",
+    );
+
+    const TestType = struct {
+        string: []const u8,
+        list: []const i64,
+    };
+    try std.testing.expectError(
+        error.TypeError,
+        vm.env.toZig(TestType, std.testing.allocator, v),
     );
 }

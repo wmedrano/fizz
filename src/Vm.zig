@@ -65,6 +65,28 @@ test "index.md example test" {
     try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
 }
 
+// Tests the example code from site/zig-api.md
+test "zig-api.md example test" {
+    var alloc = std.testing.allocator;
+    var vm = try Vm.init(alloc);
+    defer vm.deinit();
+
+    _ = try vm.evalStr(alloc, .{}, "(define magic-numbers (list 1 2 3 4))");
+    const val = try vm.evalStr(alloc, .{}, "(struct 'numbers magic-numbers 'numbers-sum (apply + magic-numbers))");
+
+    const ResultType = struct { numbers: []const i64, numbers_sum: i64 };
+    const result = try vm.env.toZig(
+        ResultType,
+        alloc,
+        val,
+    );
+    defer alloc.free(result.numbers);
+    try std.testing.expectEqualDeep(
+        ResultType{ .numbers = &[_]i64{ 1, 2, 3, 4 }, .numbers_sum = 10 },
+        result,
+    );
+}
+
 test "can eval basic expression" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();

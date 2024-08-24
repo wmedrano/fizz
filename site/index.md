@@ -12,7 +12,7 @@ nav_order: 0
 Fizz is an interpretted programming language that aims for simplicity and clean
 Zig integration.
 
-WARNING: Fizz is not yet in a usable state.
+WARNING: Fizz is not yet in a stable state.
 
 ## Simplicity
 
@@ -50,6 +50,3 @@ const actual = try vm.env.toZig([]i64, std.testing.allocator, v);
 defer std.testing.allocator.free(actual);
 try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
 ```
-
-Zig Integration TODOs:
-  1. Support structs.

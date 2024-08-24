@@ -1,3 +1,11 @@
+"------------------------------------------------------------"
+"test define"
+(define test-define "defined once")
+test-define
+(define test-define "redefined")
+test-define
+
+"------------------------------------------------------------"
 "test functions"
 (define pi 3.14)
 (define circle-area
@@ -6,6 +14,7 @@
 (circle-area 100)
 (circle-area 100.0)
 
+"------------------------------------------------------------"
 "test lists"
 (define lst (list 1 2 3 4))
 (first lst)
@@ -14,11 +23,13 @@
 (nth lst 3)
 
 
+"------------------------------------------------------------"
 "test structs"
 (define test-struct (struct 'hello "world"))
 test-struct
 (struct-get test-struct 'hello)
 
+"------------------------------------------------------------"
 "test fib"
 (define fib
   (lambda (n)
@@ -26,6 +37,8 @@ test-struct
       (+ (fib (- n 1)) (fib (- n 2))))))
 (fib 25)
 
+"------------------------------------------------------------"
 "test modules"
 (import "/dev/null")
 (%modules%)
+"------------------------------------------------------------"
