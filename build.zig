@@ -32,6 +32,13 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&check_exe.step);
     check_step.dependOn(&check_test.step);
 
+    // Module: fizz
+    _ = b.addModule("fizz", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Command: zig build run
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

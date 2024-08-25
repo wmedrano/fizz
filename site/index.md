@@ -56,8 +56,8 @@ Fizz is built in Zig and meant to easily integrate into a Zig codebase.
 const fizz = @import("fizz");
 var vm = try fizz.Vm.init(std.testing.allocator);
 defer vm.deinit();
-_ = try vm.evalStr(std.testing.allocator, "(define args (list 1 2 3 4))");
-const v = try vm.evalStr(std.testing.allocator, "args");
+
+const v = try vm.evalStr(std.testing.allocator, "(list 1 2 3 4)");
 const actual = try vm.env.toZig([]i64, std.testing.allocator, v);
 defer std.testing.allocator.free(actual);
 try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);

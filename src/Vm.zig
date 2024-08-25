@@ -107,6 +107,15 @@ test "can eval basic expression" {
     try std.testing.expectEqual(1, vm.env.runtime_stats.function_calls);
 }
 
+test "multiple expressions returns last expression" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    const actual = try vm.evalStr(std.testing.allocator, "4 5 6");
+    try vm.env.runGc();
+    try std.testing.expectEqual(Val{ .int = 6 }, actual);
+    try std.testing.expectEqual(1, vm.env.runtime_stats.function_calls);
+}
+
 test "can deref symbols" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();

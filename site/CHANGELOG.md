@@ -26,7 +26,7 @@ Will focus on:
 
 - Improved error reporting.
 - Incorporating user feedback.
-- Performance tweaks.
+- Performance & API tweaks.
 
 ### 0.1.0 (Current)
 

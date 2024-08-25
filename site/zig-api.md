@@ -9,11 +9,18 @@ nav_order: 1
 
 ## Quickstart
 
-In the following example, we:
-
-1. Add fizz as a dependency.
-   > TODO
-1. Create the Fizz virtual machine.
+1. Download Fizz and place it in `build.zig.zon`.
+   ```sh
+   zig fetch --save https://github.com/wmedrano/fizz/archive/refs/tags/v0.1.0.tar.gz
+   ```
+1. Add Fizz as a dependency in `build.zig`.
+   ```zig
+   const fizz = b.dependency("fizz", .{
+	   .target = target,
+	   .optimize = optimize,
+   });
+   ```
+1. Create the Fizz virtual machine in your code, for example, `src/main.zig`.
 	```zig
 	const fizz = @import("fizz");
 	var vm = try fizz.Vm.init(allocator);
@@ -21,20 +28,24 @@ In the following example, we:
 	```
 1. Run some code within the virtual machine.
    ```zig
-   _ = try vm.EvalStr(allocator, "(define magic-numbers (list 1 2 3 4))");
-   const val = try vm.evalStr(
-       allocator,
-	   "(struct 'numbers magic-numbers 'numbers-sum (apply + magic-numbers))");
+   const src = \\
+   \\ (define magic-numbers (list 1 2 3 4))
+   \\ (struct
+   \\   'numbers magic-numbers
+   \\   'numbers-sum (apply + magic-numbers)
+   \\ )
+   ;
+   const val = try vm.EvalStr(allocator, src);
    ```
 1. Convert VM values into Zig.
    ```zig
-    const ResultType = struct { numbers: []const i64, numbers_sum: i64 };
-    const result = try vm.env.toZig(
-        ResultType,
-        allocator,
-        val,
-    );
-    defer allocator.free(result.numbers);
+   const ResultType = struct { numbers: []const i64, numbers_sum: i64 };
+   const result = try vm.env.toZig(
+       ResultType,
+       allocator,
+       val,
+   );
+   defer allocator.free(result.numbers);
    ```
 1. Run the garbage collector from time to time.
    ```zig
@@ -64,17 +75,35 @@ try vm.runGc();
 defer vm.deinit();
 ```
 
+## Evaluating Expressions
+
+Expressions can be evaluated with `vm.evalStr`. The value of the returned
+`fizz.Val` is guaranteed to exist until the next garbage collection run. See
+[Extracting Values](#extracting-values) to extend the lifetime of the returned
+values.
+
+```zig
+fn evalStr(self: *fizz.Vm, tmp_allocator: std.mem.Allocator, expr: []const u8) fizz.Val
+```
+
+- `self`: Pointer to the virtual machine.
+- `tmp_allocator`: Allocator used for temporary memory for AST and ByteCode
+  compiler.
+- `expr`: Lisp expression to evaluate. If multiple expressions are provided, the
+  returned `fizz.Val` will contain the value of the final expression.
+
+
 ## Extracting Values
 
 Values are extracted using `vm.env.toZig`.
 
 ```zig
-fn toZig(self: *Env, comptime T: type, allocator: Allocator, val: Val) !T
+fn toZig(self: *fizz.Env, comptime T: type, allocator: std.mem.Allocator, val: fizz.Val) !T
 ```
 
 - `self`: A pointer to the environment.
 - `T`: The desired output Zig type.
-- `allocator`: Memory allocator for dynamic memory allocation
+- `allocator`: Memory allocator for any string or slice allocations.
 - `val`: The input value to be converted
 
 **Example**
