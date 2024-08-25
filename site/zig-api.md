@@ -5,38 +5,29 @@ nav_enabled: true
 nav_order: 1
 ---
 
-{: .todo}
-> Tag a 0.1.0 Fizz release and document how to use it as a module.
-
 # Zig API
 
 ## Quickstart
 
 In the following example, we:
 
+1. Add fizz as a dependency.
+   > TODO
 1. Create the Fizz virtual machine.
+	```zig
+	const fizz = @import("fizz");
+	var vm = try fizz.Vm.init(allocator);
+	defer vm.deinit();
+	```
 1. Run some code within the virtual machine.
-1. Convert a value into a custom Zig object.
-
-```zig
-const Vm = import("Vm.zig");
-
-pub fn main() {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var allocator = gpa.allocator();
-
-    // Create a VM.
-    var vm = try Vm.init(allocator);
-    defer vm.deinit();
-
-    // Evaluate an expression.
-    _ = try vm.evalStr(allocator, "(define magic-numbers (list 1 2 3 4))");
-    const val = try vm.evalStr(
-        allocator,
-        "(struct 'numbers magic-numbers 'numbers-sum (apply + magic-numbers))",
-    );
-
-    // Convert the results into a Zig object.
+   ```zig
+   _ = try vm.EvalStr(allocator, "(define magic-numbers (list 1 2 3 4))");
+   const val = try vm.evalStr(
+       allocator,
+	   "(struct 'numbers magic-numbers 'numbers-sum (apply + magic-numbers))");
+   ```
+1. Convert VM values into Zig.
+   ```zig
     const ResultType = struct { numbers: []const i64, numbers_sum: i64 };
     const result = try vm.env.toZig(
         ResultType,
@@ -44,44 +35,33 @@ pub fn main() {
         val,
     );
     defer allocator.free(result.numbers);
+   ```
+1. Run the garbage collector from time to time.
+   ```zig
+   try vm.runGc();
+   ```
 
-    // Use the results.
-    std.debug.print("Result is: {any}\n", .{result});
-}
-```
+## Memory Management
 
-## Initialization & Memory Management
+Fizz is a garbage collected language. As the program runs, it will allocate
+memory as needed. However, when the memory is not needed, it will stick around
+until either `Vm.deinit` or `Vm.runGc` has run.
 
-A VM is created with `try Vm.init(allocator)`. All values created for the VM
-will use the allocator. Memory is cleaned up on `vm.deinit` and sometimes on
-`vm.runGc`. Due to the use of garbage collection, it is not recommended to use
-an arena for most uses.
+{: .todo}
+> Allow Garbage Collector to automatically run when needed.
 
 ```zig
-var vm = try Vm.init(allocator);
+const fizz = @import("fizz");
+var vm = try fizz.Vm.init(allocator);
 
-// Do stuff...
-try vm.runGc(); // Run GC from time to time.
+// Do stuff
+...
 
+// Run GC to free up some memory.
+try vm.runGc();
+
+// Run deinit to free all memory.
 defer vm.deinit();
-```
-
-### Garbage Collection
-
-Fizz is a garbage collected language. Garbage collection is not yet automated
-and must be called manually.
-
-**Example**
-
-```zig
-fn doStuff(allocator: std.mem.Allocator, vm: *Vm) !void {
-    // Bind a new list to x.
-    const _ = try vm.evalStr(allocator, "(define x (list 1 2 3 4))");
-    // Bind a new list to x. The previous list will still live in memory.
-    const _ = try vm.evalStr(allocator, "(define x (list 1 2 3 4))");
-    // Run the garbage collector. The unused list will be cleaned up.
-    try vm.runGc();
-}
 ```
 
 ## Extracting Values
@@ -100,7 +80,7 @@ fn toZig(self: *Env, comptime T: type, allocator: Allocator, val: Val) !T
 **Example**
 
 ```zig
-fn buildStringInFizz(allocator: std.mem.allocator, vm: *Vm) ![]const u8 {
+fn buildStringInFizz(allocator: std.mem.allocator, vm: *fizz.Vm) ![]const u8 {
    const val = try vm.evalStr(allocator, "(str-concat (list \"hello\" \" \" \"world\"))");
    const string_val = try vm.env.toZig([]const u8, val);
    return string_val;
@@ -150,7 +130,7 @@ defer allocator.free(result.my_list);
 
 {: .warning}
 > Unstable, WIP! The function signature of custom functions and representation
-> of `Vm.Val` may change.
+> of `fizz.Val` may change.
 
 Custom functions written in Zig may be registered with `Vm.registerGlobalFn` and
 invoked within the VM.

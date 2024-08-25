@@ -7,13 +7,17 @@ nav_order: 0
 
 # Fizz
 
-[website](https://wmedrano.github.io/fizz)
-
 Fizz is a **simple** interpretted programming language meant for **embedding in
 Zig**.
 
 {: .warning}
-> Fizz is not yet in a stable state.
+> Fizz is not yet in a stable state. If you have a use case that you would like
+> handled, file an issue [![🪲](Bug)](https://github.com/wmedrano/fizz/issues).
+
+**Links**
+
+| [<img width=16px src="https://github.githubassets.com/images/icons/emoji/octocat.png"> GitHub](https://github.com/wmedrano/fizz) | [❤ Sponsor](https://github.com/sponsors/wmedrano)                                                             |
+| [📚 Documentation](https://wmedrano.github.io/fizz)                                                                              | [<img width=16px src="https://avatars.githubusercontent.com/u/27973237"> Zig Discord](https://discord.gg/zig) |
 
 ## Goals
 
@@ -49,7 +53,8 @@ It should be easy to get started writing Fizz. Fizz supports the following:
 Fizz is built in Zig and meant to easily integrate into a Zig codebase.
 
 ```zig
-var vm = try Vm.init(std.testing.allocator);
+const fizz = @import("fizz");
+var vm = try fizz.Vm.init(std.testing.allocator);
 defer vm.deinit();
 _ = try vm.evalStr(std.testing.allocator, "(define args (list 1 2 3 4))");
 const v = try vm.evalStr(std.testing.allocator, "args");
