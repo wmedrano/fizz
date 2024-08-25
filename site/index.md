@@ -52,6 +52,8 @@ It should be easy to get started writing Fizz. Fizz supports the following:
 
 Fizz is built in Zig and meant to easily integrate into a Zig codebase.
 
+[📚 documentation](https://wmedrano.github.io/fizz/zig-api)
+
 ```zig
 const fizz = @import("fizz");
 var vm = try fizz.Vm.init(std.testing.allocator);

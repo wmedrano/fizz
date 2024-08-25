@@ -15,10 +15,16 @@ nav_order: 1
    ```
 1. Add Fizz as a dependency in `build.zig`.
    ```zig
+   // Create the fizz dependency.
    const fizz = b.dependency("fizz", .{
 	   .target = target,
 	   .optimize = optimize,
    });
+
+   ..
+
+   // Use it for our executable.
+   exe.root_module.addImport("fizz", fizz.module("fizz"));
    ```
 1. Create the Fizz virtual machine in your code, for example, `src/main.zig`.
 	```zig
@@ -51,29 +57,6 @@ nav_order: 1
    ```zig
    try vm.runGc();
    ```
-
-## Memory Management
-
-Fizz is a garbage collected language. As the program runs, it will allocate
-memory as needed. However, when the memory is not needed, it will stick around
-until either `Vm.deinit` or `Vm.runGc` has run.
-
-{: .todo}
-> Allow Garbage Collector to automatically run when needed.
-
-```zig
-const fizz = @import("fizz");
-var vm = try fizz.Vm.init(allocator);
-
-// Do stuff
-...
-
-// Run GC to free up some memory.
-try vm.runGc();
-
-// Run deinit to free all memory.
-defer vm.deinit();
-```
 
 ## Evaluating Expressions
 
@@ -154,6 +137,31 @@ const result = try vm.env.toZig(TestType, allocator, complex_val);
 defer allocator.free(result.my_string);
 defer allocator.free(result.my_list);
 ```
+
+## Memory Management
+
+Fizz is a garbage collected language. As the program runs, it will allocate
+memory as needed. However, when the memory is not needed, it will stick around
+until either `Vm.deinit` or `Vm.runGc` has run.
+
+{: .todo}
+> Allow Garbage Collector to automatically run when needed.
+> <https://github.com/wmedrano/fizz/issues/4>
+
+```zig
+const fizz = @import("fizz");
+var vm = try fizz.Vm.init(allocator);
+
+// Do stuff
+...
+
+// Run GC to free up some memory.
+try vm.runGc();
+
+// Run deinit to free all memory.
+defer vm.deinit();
+```
+
 
 ## Custom Functions
 
