@@ -10,11 +10,23 @@ const Compiler = @import("Compiler.zig");
 const builtins = @import("builtins.zig");
 const std = @import("std");
 
+/// Deals with allocating and deallocating values. This involves garbage collection.
 memory_manager: MemoryManager,
+
+/// Holds the data stack. The boundary of function start and end indices is in the frames object.
 stack: std.ArrayListUnmanaged(Val),
+
+/// Holds the stack frames with the final value containing the details of the current function call.
 frames: std.ArrayListUnmanaged(Frame),
+
+/// Holds the global module.
 global_module: Module,
+
+/// Map from module name to the module itself. The Key is a copy of the name within the *Module
+/// corresponding object.
 modules: std.StringHashMapUnmanaged(*Module),
+
+// Runtime stats for the VM.
 runtime_stats: RuntimeStats,
 
 pub const Error = std.mem.Allocator.Error || Val.NativeFn.Error || error{ SymbolNotFound, FileError, SyntaxError };
@@ -242,22 +254,28 @@ pub fn registerModule(self: *Environment, module: *Module) !void {
 
 /// Delete a module.
 pub fn deleteModule(self: *Environment, module: *Module) !void {
-    if (self.modules.getEntry(module.name)) |found_module| {
-        if (found_module.value_ptr.* != module) return error.ModuleDoesNotMatchRegisteredModule;
-        var modules_iter = self.modules.valueIterator();
-        while (modules_iter.next()) |any_m| {
-            if (any_m.* == module) continue;
-            var aliases_iter = any_m.*.alias_to_module.iterator();
-            while (aliases_iter.next()) |alias| {
-                if (alias.value_ptr.* == module) {
-                    any_m.*.alias_to_module.removeByPtr(alias.key_ptr);
-                }
+    const module_entry = self.modules.getEntry(module.name) orelse return error.ModuleDoesNotExist;
+
+    // Remove from any aliases.
+    var del_arena = std.heap.ArenaAllocator.init(self.allocator());
+    defer del_arena.deinit();
+    var modules_iter = self.modules.valueIterator();
+    while (modules_iter.next()) |any_module| {
+        if (any_module.* == module) continue;
+        var aliases_to_delete = std.ArrayList([]const u8).init(del_arena.allocator());
+        var aliases_iter = any_module.*.alias_to_module.iterator();
+        while (aliases_iter.next()) |alias| {
+            if (alias.value_ptr.* == module) {
+                try aliases_to_delete.append(alias.key_ptr.*);
             }
         }
-        module.deinit(self.allocator());
-        self.modules.removeByPtr(found_module.key_ptr);
+        for (aliases_to_delete.items) |a| _ = any_module.*.clearModuleAlias(self.allocator(), a);
+        _ = del_arena.reset(.retain_capacity);
     }
-    return error.ModuleDoesNotExist;
+
+    // Remove the module.
+    self.modules.removeByPtr(module_entry.key_ptr);
+    module.deinit(self.allocator());
 }
 
 /// Evaluate the function and return the result.

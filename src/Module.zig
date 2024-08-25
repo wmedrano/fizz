@@ -70,6 +70,18 @@ pub fn setModuleAlias(self: *Module, allocator: std.mem.Allocator, alias: []cons
     try self.alias_to_module.put(allocator, alias_dupe, module);
 }
 
+/// Clear the module alias. If the alias is cleared, then `true` is returned. If the module did not
+/// exist, then `false` is returned.
+///
+/// The passed in allocator is used to free the alias map.
+pub fn clearModuleAlias(self: *Module, allocator: std.mem.Allocator, alias: []const u8) bool {
+    const entry = self.alias_to_module.getEntry(alias) orelse return false;
+    const alias_data = entry.key_ptr.*;
+    self.alias_to_module.removeByPtr(entry.key_ptr);
+    allocator.free(alias_data);
+    return true;
+}
+
 /// Get the default name for the alias for a module derived from path.
 pub fn defaultModuleAlias(path: []const u8) []const u8 {
     if (path.len == 0) return &.{};
