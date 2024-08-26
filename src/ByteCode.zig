@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 
 name: []const u8,
 arg_count: usize,
+locals_count: usize,
 instructions: std.ArrayListUnmanaged(Instruction),
 module: *Module,
 
@@ -52,6 +53,7 @@ const ByteCodeValuesIter = struct {
                 .deref_local => {},
                 .deref_global => {},
                 .get_arg => {},
+                .move => {},
                 .eval => {},
                 .jump => {},
                 .jump_if => {},
@@ -80,6 +82,8 @@ pub const Instruction = union(enum) {
     deref_global: []const u8,
     /// Get the nth value (0-based index) from the base of the current function call stack.
     get_arg: usize,
+    /// Move the top value of the stack into the given index.
+    move: usize,
     /// Evaluate the top n elements of the stack. The deepmost value should be a function.
     eval: usize,
     /// Jump instructions in the bytecode.
@@ -115,6 +119,7 @@ pub const Instruction = union(enum) {
             .deref_global => |sym| try writer.print("deref_global({s})", .{sym}),
             .deref_local => |sym| try writer.print("deref_local({s})", .{sym}),
             .get_arg => |n| try writer.print("get_arg({d})", .{n}),
+            .move => |n| try writer.print("move({d})", .{n}),
             .eval => |n| try writer.print("eval({d})", .{n}),
             .jump => |n| try writer.print("jump({d})", .{n}),
             .jump_if => |n| try writer.print("jump_if({d})", .{n}),

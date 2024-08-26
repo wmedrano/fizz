@@ -321,6 +321,7 @@ fn runNext(self: *Environment) Error!bool {
     var frame = &self.frames.items[self.frames.items.len - 1];
     switch (frame.instruction[0]) {
         .get_arg => |idx| try self.executeGetArg(frame, idx),
+        .move => |idx| try self.executeMove(frame, idx),
         .push_const => |v| try self.executePushConst(v),
         .ret => {
             const should_continue = try self.executeRet();
@@ -363,6 +364,11 @@ fn executeGetArg(self: *Environment, frame: *const Frame, idx: usize) !void {
     try self.stack.append(self.allocator(), v);
 }
 
+fn executeMove(self: *Environment, frame: *const Frame, idx: usize) !void {
+    const v = self.stack.popOrNull() orelse return error.RuntimeError;
+    self.stack.items[frame.stack_start + idx] = v;
+}
+
 fn executeEval(self: *Environment, frame: *const Frame, n: usize) !void {
     self.runtime_stats.function_calls += 1;
     const norm_n: usize = if (n == 0) self.stack.items.len - frame.stack_start else n;
@@ -373,6 +379,7 @@ fn executeEval(self: *Environment, frame: *const Frame, n: usize) !void {
     switch (func) {
         .bytecode => |bc| {
             if (bc.arg_count != arg_count) return error.ArrityError;
+            try self.stack.appendNTimes(self.allocator(), .none, bc.locals_count);
             const new_frame = Frame{
                 .bytecode = bc,
                 .instruction = bc.instructions.items.ptr,

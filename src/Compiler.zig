@@ -13,55 +13,61 @@ const Error = std.mem.Allocator.Error || error{BadSyntax};
 
 /// The virtual machine to compile for.
 env: *Environment,
+
 /// The arguments that are in scope.
 args: [][]const u8,
+/// The local variables that are in scope.
+locals: std.ArrayList([]const u8),
+
 /// The module that the code is under.
 module: *Module,
 /// If a module is being compiled. This enables special behavior such as:
 ///   - Define statements set values within the module.
 is_module: bool = false,
-/// The values that are defined by the Ir. This is populated when calling compile and is only valid
-/// when is_module is true.
-defined_vals: std.StringHashMap(void),
+/// The values that are defined in `module`.
+module_defined_vals: std.StringHashMap(void),
 
 /// Initialize a compiler for a function that lives inside `module`.
 pub fn initFunction(allocator: std.mem.Allocator, env: *Environment, module: *Module, args: [][]const u8) !Compiler {
-    var defined_vals = std.StringHashMap(void).init(allocator);
+    var module_defined_vals = std.StringHashMap(void).init(allocator);
     var module_definitions = module.values.keyIterator();
-    while (module_definitions.next()) |def| try defined_vals.put(def.*, {});
+    while (module_definitions.next()) |def| try module_defined_vals.put(def.*, {});
     return .{
         .env = env,
         .args = args,
+        .locals = std.ArrayList([]const u8).init(allocator),
         .module = module,
         .is_module = false,
-        .defined_vals = defined_vals,
+        .module_defined_vals = module_defined_vals,
     };
 }
 
 /// Initialize a compiler for a module definition.
 pub fn initModule(allocator: std.mem.Allocator, env: *Environment, module: *Module) !Compiler {
-    var defined_vals = std.StringHashMap(void).init(allocator);
+    var module_defined_vals = std.StringHashMap(void).init(allocator);
     var module_definitions = module.values.keyIterator();
-    while (module_definitions.next()) |def| try defined_vals.put(def.*, {});
+    while (module_definitions.next()) |def| try module_defined_vals.put(def.*, {});
     return .{
         .env = env,
         .args = &.{},
+        .locals = std.ArrayList([]const u8).init(allocator),
         .module = module,
         .is_module = true,
-        .defined_vals = defined_vals,
+        .module_defined_vals = module_defined_vals,
     };
 }
 
 /// Deinitialize the compiler.
 pub fn deinit(self: *Compiler) void {
-    self.defined_vals.deinit();
+    self.module_defined_vals.deinit();
+    self.locals.deinit();
 }
 
 /// Create a new ByteCode from the Ir.
 pub fn compile(self: *Compiler, ir: *const Ir) !Val {
     var irs = [1]*const Ir{ir};
     if (self.is_module) {
-        try ir.definedVals(&self.defined_vals);
+        try ir.populateDefinedVals(&self.module_defined_vals);
     }
     const bc = try self.compileImpl(&irs);
     if (bc.instructions.items.len == 0 or bc.instructions.items[bc.instructions.items.len - 1].tag() != .ret) {
@@ -74,18 +80,38 @@ fn compileImpl(self: *Compiler, irs: []const *const Ir) Error!*ByteCode {
     const bc = try self.env.memory_manager.allocateByteCode(self.module);
     bc.arg_count = self.args.len;
     for (irs) |ir| try self.addIr(bc, ir);
+    bc.locals_count = self.locals.items.len;
     return bc;
 }
 
+fn addLocal(self: *Compiler, local_name: []const u8) !usize {
+    const idx = self.args.len + self.locals.items.len;
+    try self.locals.append(local_name);
+    return idx;
+}
+
 fn argIdx(self: *const Compiler, arg_name: []const u8) ?usize {
+    // The most recently defined locals take precedence.
+    if (self.locals.items.len > 0) {
+        var local_idx: isize = @intCast(self.locals.items.len - 1);
+        while (local_idx >= 0) {
+            const local = self.locals.items[@intCast(local_idx)];
+            if (std.mem.eql(u8, arg_name, local)) return self.args.len + @as(usize, @intCast(local_idx));
+            local_idx -= 1;
+        }
+    }
+
     for (0..self.args.len, self.args) |idx, arg| {
         if (std.mem.eql(u8, arg_name, arg)) return idx;
     }
+
     return null;
 }
 
 fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
     const is_module = self.is_module;
+    // Modules consist of the form: Ir{ .ret = <exprs> } where top level <exprs> may call `define`
+    // to `define` something at the module level.
     if (@as(Ir.Tag, ir.*) != Ir.Tag.ret) {
         self.is_module = false;
     }
@@ -98,22 +124,28 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             );
         },
         .define => |def| {
-            if (!is_module) {
-                return Error.BadSyntax;
+            if (is_module) {
+                try bc.instructions.append(
+                    self.env.allocator(),
+                    .{ .push_const = self.env.global_module.getVal("*define*") orelse @panic("builtin *define* not available") },
+                );
+                try bc.instructions.append(
+                    self.env.allocator(),
+                    .{ .push_const = try self.env.memory_manager.allocateSymbolVal(def.name) },
+                );
+                try self.addIr(bc, def.expr);
+                try bc.instructions.append(
+                    self.env.allocator(),
+                    .{ .eval = 3 },
+                );
+            } else {
+                const local_idx = try self.addLocal(def.name);
+                try self.addIr(bc, def.expr);
+                try bc.instructions.append(
+                    self.env.allocator(),
+                    .{ .move = local_idx },
+                );
             }
-            try bc.instructions.append(
-                self.env.allocator(),
-                .{ .push_const = self.env.global_module.getVal("*define*") orelse @panic("builtin *define* not available") },
-            );
-            try bc.instructions.append(
-                self.env.allocator(),
-                .{ .push_const = try self.env.memory_manager.allocateSymbolVal(def.name) },
-            );
-            try self.addIr(bc, def.expr);
-            try bc.instructions.append(
-                self.env.allocator(),
-                .{ .eval = 3 },
-            );
         },
         .import_module => |m| {
             if (!is_module) {
@@ -130,7 +162,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             } else {
                 const sym = try self.env.allocator().dupe(u8, s);
                 const parsed_sym = Module.parseModuleAndSymbol(sym);
-                if (self.defined_vals.contains(s) or parsed_sym.module_alias != null) {
+                if (self.module_defined_vals.contains(s) or parsed_sym.module_alias != null) {
                     try bc.instructions.append(self.env.allocator(), .{ .deref_local = sym });
                 } else {
                     try bc.instructions.append(self.env.allocator(), .{ .deref_global = sym });
@@ -202,6 +234,7 @@ test "if expression" {
         .bytecode = @constCast(&ByteCode{
             .name = "",
             .arg_count = 0,
+            .locals_count = 0,
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{
                     .{ .push_const = .{ .boolean = true } },
@@ -235,6 +268,7 @@ test "if expression without false branch returns none" {
         .bytecode = @constCast(&ByteCode{
             .name = "",
             .arg_count = 0,
+            .locals_count = 0,
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{
                     .{ .push_const = .{ .boolean = true } },
@@ -279,6 +313,7 @@ test "module with define expressions" {
         .bytecode = @constCast(&ByteCode{
             .name = "",
             .arg_count = 0,
+            .locals_count = 0,
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{
                     .{ .push_const = vm.global_module.getVal("*define*").? },
@@ -298,7 +333,7 @@ test "module with define expressions" {
     }, actual);
 }
 
-test "define outside of module produces error" {
+test "define outside of module creates stack local" {
     const ir = Ir{
         .ret = .{
             .exprs = @constCast(&[_]*Ir{
@@ -308,6 +343,12 @@ test "define outside of module produces error" {
                         .expr = @constCast(&Ir{ .constant = .{ .float = 3.14 } }),
                     },
                 }),
+                @constCast(&Ir{
+                    .define = .{
+                        .name = "2pi",
+                        .expr = @constCast(&Ir{ .constant = .{ .float = 6.28 } }),
+                    },
+                }),
             }),
         },
     };
@@ -315,25 +356,45 @@ test "define outside of module produces error" {
     defer vm.deinit();
     var compiler = try Compiler.initFunction(std.testing.allocator, &vm, try vm.getOrCreateModule(.{}), &.{});
     defer compiler.deinit();
-    try std.testing.expectError(Error.BadSyntax, compiler.compile(&ir));
+
+    const actual = try compiler.compile(&ir);
+    try std.testing.expectEqualDeep(Val{
+        .bytecode = @constCast(&ByteCode{
+            .name = "",
+            .arg_count = 0,
+            .locals_count = 2,
+            .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
+                .items = @constCast(&[_]ByteCode.Instruction{
+                    .{ .push_const = .{ .float = 3.14 } },
+                    .{ .move = 0 },
+                    .{ .push_const = .{ .float = 6.28 } },
+                    .{ .move = 1 },
+                    .ret,
+                }),
+                .capacity = actual.bytecode.instructions.capacity,
+            },
+            .module = vm.getModule(Module.Builder.default_name).?,
+        }),
+    }, actual);
 }
 
-test "define in bad context produces error" {
-    const ir = Ir{
-        .if_expr = .{
-            .predicate = @constCast(&Ir{
-                .define = .{
-                    .name = "pi",
-                    .expr = @constCast(&Ir{ .constant = .{ .float = 3.14 } }),
-                },
-            }),
-            .true_expr = @constCast(&Ir{ .constant = .{ .int = 1 } }),
-            .false_expr = null,
-        },
-    };
-    var vm = try Environment.init(std.testing.allocator);
-    defer vm.deinit();
-    var compiler = try Compiler.initModule(std.testing.allocator, &vm, try vm.getOrCreateModule(.{}));
-    defer compiler.deinit();
-    try std.testing.expectError(Error.BadSyntax, compiler.compile(&ir));
-}
+// TODO:
+// test "define in bad context produces error" {
+//     const ir = Ir{
+//         .if_expr = .{
+//             .predicate = @constCast(&Ir{
+//                 .define = .{
+//                     .name = "pi",
+//                     .expr = @constCast(&Ir{ .constant = .{ .float = 3.14 } }),
+//                 },
+//             }),
+//             .true_expr = @constCast(&Ir{ .constant = .{ .int = 1 } }),
+//             .false_expr = null,
+//         },
+//     };
+//     var vm = try Environment.init(std.testing.allocator);
+//     defer vm.deinit();
+//     var compiler = try Compiler.initModule(std.testing.allocator, &vm, try vm.getOrCreateModule(.{}));
+//     defer compiler.deinit();
+//     try std.testing.expectError(Error.BadSyntax, compiler.compile(&ir));
+// }

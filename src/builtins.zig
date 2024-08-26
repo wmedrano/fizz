@@ -341,7 +341,7 @@ fn filter(env: *Environment, vals: []const Val) Error!Val {
         else => return Error.TypeError,
     };
 
-    var keep_values = std.ArrayList(Val).initCapacity(env.allocator(), input_list.len);
+    var keep_values = std.ArrayList(Val).initCapacity(env.allocator(), input_list.len) catch return Error.RuntimeError;
     defer keep_values.deinit();
     for (input_list) |input| {
         const keep = env.evalNoReset(func, &[1]Val{input}) catch return Error.RuntimeError;

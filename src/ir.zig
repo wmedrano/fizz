@@ -97,10 +97,10 @@ pub const Ir = union(enum) {
     }
 
     /// Populate define_set with all symbols that are defined.
-    pub fn definedVals(self: *const Ir, defined_vals: *std.StringHashMap(void)) !void {
+    pub fn populateDefinedVals(self: *const Ir, defined_vals: *std.StringHashMap(void)) !void {
         switch (self.*) {
             .define => |def| try defined_vals.put(def.name, {}),
-            .ret => |r| for (r.exprs) |e| try e.definedVals(defined_vals),
+            .ret => |r| for (r.exprs) |e| try e.populateDefinedVals(defined_vals),
             else => {},
         }
     }
@@ -557,7 +557,7 @@ test "definedVals visits all defined values" {
     };
     var actual = std.StringHashMap(void).init(std.testing.allocator);
     defer actual.deinit();
-    try ir.definedVals(&actual);
+    try ir.populateDefinedVals(&actual);
     try std.testing.expectEqual(2, actual.count());
     try std.testing.expect(actual.contains("foo"));
     try std.testing.expect(actual.contains("bar"));
