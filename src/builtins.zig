@@ -22,6 +22,8 @@ pub fn registerAll(env: *Environment) !void {
     try env.global_module.setVal(env, "first", .{ .native_fn = .{ .impl = first } });
     try env.global_module.setVal(env, "rest", .{ .native_fn = .{ .impl = rest } });
     try env.global_module.setVal(env, "nth", .{ .native_fn = .{ .impl = nth } });
+    try env.global_module.setVal(env, "map", .{ .native_fn = .{ .impl = map } });
+    try env.global_module.setVal(env, "filter", .{ .native_fn = .{ .impl = filter } });
     try env.global_module.setVal(env, "+", .{ .native_fn = .{ .impl = add } });
     try env.global_module.setVal(env, "-", .{ .native_fn = .{ .impl = subtract } });
     try env.global_module.setVal(env, "*", .{ .native_fn = .{ .impl = multiply } });
@@ -127,8 +129,8 @@ fn toStringImpl(buff: *std.ArrayList(u8), val: Val) !void {
             }
             try buff.appendSlice(")");
         },
-        .structV => |map| {
-            var iter = map.iterator();
+        .structV => |struct_map| {
+            var iter = struct_map.iterator();
             try buff.appendSlice("(struct");
             while (iter.next()) |v| {
                 try buff.appendSlice(" ");
@@ -233,7 +235,7 @@ fn makeStruct(env: *Environment, vals: []const Val) Error!Val {
 
 fn structSet(env: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 3) return Error.ArrityError;
-    const map = switch (vals[0]) {
+    const struct_map = switch (vals[0]) {
         .structV => |m| m,
         else => return Error.TypeError,
     };
@@ -241,19 +243,19 @@ fn structSet(env: *Environment, vals: []const Val) Error!Val {
         .symbol => |s| s,
         else => return Error.TypeError,
     };
-    if (map.getKey(sym)) |k| {
-        map.put(env.allocator(), k, vals[2]) catch return Error.RuntimeError;
+    if (struct_map.getKey(sym)) |k| {
+        struct_map.put(env.allocator(), k, vals[2]) catch return Error.RuntimeError;
         return .none;
     }
     const sym_key = env.allocator().dupe(u8, sym) catch return Error.RuntimeError;
     errdefer env.allocator().free(sym_key);
-    map.put(env.allocator(), sym_key, vals[2]) catch return Error.RuntimeError;
+    struct_map.put(env.allocator(), sym_key, vals[2]) catch return Error.RuntimeError;
     return .none;
 }
 
 fn structGet(_: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
-    const map = switch (vals[0]) {
+    const struct_map = switch (vals[0]) {
         .structV => |m| m,
         else => return Error.TypeError,
     };
@@ -261,7 +263,7 @@ fn structGet(_: *Environment, vals: []const Val) Error!Val {
         .symbol => |s| s,
         else => return Error.TypeError,
     };
-    const v = map.get(sym) orelse return Error.RuntimeError;
+    const v = struct_map.get(sym) orelse return Error.RuntimeError;
     return v;
 }
 
@@ -307,6 +309,49 @@ fn nth(_: *Environment, vals: []const Val) Error!Val {
         else => return Error.TypeError,
     };
     if (idx < lst.len) return lst[@intCast(idx)] else return Error.RuntimeError;
+}
+
+fn map(env: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 2) return Error.ArrityError;
+    const func = switch (vals[0]) {
+        .native_fn => vals[0],
+        .bytecode => vals[0],
+        else => return Error.TypeError,
+    };
+    const input_list = switch (vals[1]) {
+        .list => |lst| lst,
+        else => return Error.TypeError,
+    };
+    const ret = env.memory_manager.allocateUninitializedList(input_list.len) catch return Error.RuntimeError;
+    for (input_list, 0..input_list.len) |input, idx| {
+        ret[idx] = env.evalNoReset(func, &[1]Val{input}) catch return Error.RuntimeError;
+    }
+    return .{ .list = ret };
+}
+
+fn filter(env: *Environment, vals: []const Val) Error!Val {
+    if (vals.len != 2) return Error.ArrityError;
+    const func = switch (vals[0]) {
+        .native_fn => vals[0],
+        .bytecode => vals[0],
+        else => return Error.TypeError,
+    };
+    const input_list = switch (vals[1]) {
+        .list => |lst| lst,
+        else => return Error.TypeError,
+    };
+
+    var keep_values = std.ArrayList(Val).initCapacity(env.allocator(), input_list.len);
+    defer keep_values.deinit();
+    for (input_list) |input| {
+        const keep = env.evalNoReset(func, &[1]Val{input}) catch return Error.RuntimeError;
+        if (env.toZig(bool, env.allocator(), keep) catch return Error.RuntimeError) {
+            keep_values.append(input) catch return Error.RuntimeError;
+        }
+    }
+
+    const ret = env.memory_manager.allocateListVal(keep_values.items) catch return Error.RuntimeError;
+    return ret;
 }
 
 fn len(_: *Environment, vals: []const Val) Error!Val {

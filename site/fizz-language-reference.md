@@ -43,8 +43,9 @@ $3 = 0
 
 `(if <pred> <true-branch> <optional-false-branch>)`
 
-Returns the 2nd argument if the predicate is true, or else returns the 3rd
-argument. If the third argument is not present, then it is assumed to be none.
+Returns the `<true-branch>` if the predicate is `true`, or else returns the
+`<optional-false-branch>`. If the `<optional-false-branch>` is not omitted, then
+it is assumed to be none.
 
 ```lisp
 >> (if true "true" "false")
@@ -73,7 +74,7 @@ $3 = true
 
 ### apply
 
-`(apply <fn> <args-list>)` - Applies `<fn>` by passing in the `args-list`.
+`(apply <fn> <args-list>)` - Applies `<fn>` by passing in the `<args-list>`.
 
 ```lisp
 >> (+ 1 2 3 4)
@@ -295,10 +296,33 @@ $2 = (2 3)
 
 `(nth <list> <index>)`
 
-Get the nth element of a list based on the index. Fails if `idx` is greater or
-equal to the length of the list.
+Get the nth element of a list based on the index. Fails if `<index>` is greater
+or equal to the length of the list.
 
 ```lisp
 >> (nth (list 0 1 2 3) 2)
 $1 = 2
+```
+
+### map (0.2.0 candidate)
+
+`(map <function> <list>)`
+
+Returns a list by applying `<function>` to each element in `<list>`.
+
+```lisp
+>> (map (lambda (n) (+ n 2)) (list 0 1 2))
+$1 = (2 3 4)
+```
+
+### filter (0.2.0 candidate)
+
+`(filter <function> <list>)`
+
+Returns a list by duplicating elements from `<list>` that return `true` when
+`<function>` is applied.
+
+```lisp
+>> (filter (lambda (n) (> 0 n)) (list -1 1 -2 2 -3 3))
+$1 = (1 2 3)
 ```

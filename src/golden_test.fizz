@@ -31,7 +31,8 @@ test-str
 (rest lst)
 (rest (rest lst))
 (nth lst 3)
-
+(map (lambda (n) (+ n 1)) lst)
+(filter (lambda (n) (< n 3)) lst)
 
 "------------------------------------------------------------"
 "test structs"

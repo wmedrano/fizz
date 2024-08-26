@@ -5,8 +5,7 @@ const Ir = @import("ir.zig").Ir;
 const Compiler = @import("Compiler.zig");
 
 test "golden test" {
-    const input = try std.fs.cwd().readFileAlloc(std.testing.allocator, "./test_scripts/golden_test.fizz", 4096);
-    defer std.testing.allocator.free(input);
+    const input = @embedFile("golden_test.fizz");
 
     var writer_buffer = std.ArrayList(u8).init(std.testing.allocator);
     var writer = writer_buffer.writer();
@@ -48,23 +47,25 @@ test "golden test" {
         \\$20: (2 3 4)
         \\$21: (3 4)
         \\$22: 4
-        \\$23: "------------------------------------------------------------"
-        \\$24: "test structs"
-        \\$25: (struct 'id 0 'hello "world")
-        \\$26: (struct 'id 100 'hello "world")
-        \\$27: "world"
-        \\$28: "------------------------------------------------------------"
-        \\$29: "test fib"
-        \\$30: <function >
-        \\$31: 75025
-        \\$32: "------------------------------------------------------------"
-        \\$33: "test equal"
-        \\$34: true
-        \\$35: true
-        \\$36: "------------------------------------------------------------"
-        \\$37: "test modules"
-        \\$38: ("*global*" "*test*" "/dev/null")
-        \\$39: "------------------------------------------------------------"
+        \\$23: (2 3 4 5)
+        \\$24: (1 2)
+        \\$25: "------------------------------------------------------------"
+        \\$26: "test structs"
+        \\$27: (struct 'id 0 'hello "world")
+        \\$28: (struct 'id 100 'hello "world")
+        \\$29: "world"
+        \\$30: "------------------------------------------------------------"
+        \\$31: "test fib"
+        \\$32: <function >
+        \\$33: 75025
+        \\$34: "------------------------------------------------------------"
+        \\$35: "test equal"
+        \\$36: true
+        \\$37: true
+        \\$38: "------------------------------------------------------------"
+        \\$39: "test modules"
+        \\$40: ("*global*" "*test*" "/dev/null")
+        \\$41: "------------------------------------------------------------"
         \\
     ;
     try std.testing.expectEqualStrings(expected, actual);
