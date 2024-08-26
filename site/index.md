@@ -59,8 +59,11 @@ const fizz = @import("fizz");
 var vm = try fizz.Vm.init(std.testing.allocator);
 defer vm.deinit();
 
-const v = try vm.evalStr(std.testing.allocator, "(list 1 2 3 4)");
-const actual = try vm.env.toZig([]i64, std.testing.allocator, v);
-defer std.testing.allocator.free(actual);
+const allocators = .{
+	.compiler_allocator = std.testing.allocator,
+	.return_value_allocator = std.testing.allocator,
+};
+const actual = try vm.evalStr([]i64, allocators, "(list 1 2 3 4)");
+defer allocators.return_value_allocator.free(actual);
 try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
 ```

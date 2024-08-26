@@ -32,7 +32,7 @@ nav_order: 1
 	var vm = try fizz.Vm.init(allocator);
 	defer vm.deinit();
 	```
-1. Run some code within the virtual machine.
+1. Write some code within the virtual machine.
    ```zig
    const src = \\
    \\ (define magic-numbers (list 1 2 3 4))
@@ -41,17 +41,16 @@ nav_order: 1
    \\   'numbers-sum (apply + magic-numbers)
    \\ )
    ;
-   const val = try vm.EvalStr(allocator, src);
    ```
-1. Convert VM values into Zig.
+1. Run the code in the VM.
    ```zig
+   const allocators = .{
+	   .compiler_allocator = std.testing.allocator,
+	   .return_value_allocator = std.testing.allocator,
+   };
    const ResultType = struct { numbers: []const i64, numbers_sum: i64 };
-   const result = try vm.env.toZig(
-       ResultType,
-       allocator,
-       val,
-   );
-   defer allocator.free(result.numbers);
+   const result = try vm.evalStr(ResultType, allocators, src);
+   defer allocators.return_value_allocator.free(result.numbers);
    ```
 1. Run the garbage collector from time to time.
    ```zig
@@ -60,25 +59,38 @@ nav_order: 1
 
 ## Evaluating Expressions
 
-Expressions can be evaluated with `vm.evalStr`. The value of the returned
-`fizz.Val` is guaranteed to exist until the next garbage collection run. See
-[Extracting Values](#extracting-values) to extend the lifetime of the returned
-values.
+Expressions can be evaluated with `vm.evalStr`. The first argument is the type
+that should be returned. If you do not care about the return value, `fizz.Val`
+can be used to hold any value returned by the VM.
+
+{: .warning}
+> Any `fizz.Val` that is returned is guaranteed to exist until the next garbage
+> collection run. Use a concrete Zig type, (e.g. []u8) to ensure that the
+> allocator is used to extend the lifetime.
 
 ```zig
-fn evalStr(self: *fizz.Vm, tmp_allocator: std.mem.Allocator, expr: []const u8) fizz.Val
+/// Contains allocators needed to evaluate an expression.
+pub const EvalAllocators = struct {
+    /// Allocator used by the compiler to allocate temporary memory. Using an arena allocator is
+    /// recommended for best performance.
+    compiler_allocator: std.mem.Allocator,
+    /// Allocator used to construct return value. Only used if the return value contains slices.
+    return_value_allocator: std.mem.Allocator,
+};
+fn evalStr(self: *fizz.Vm, T: type, allocators: fizz.EvalAllocators, expr: []const u8) !T
 ```
 
 - `self`: Pointer to the virtual machine.
-- `tmp_allocator`: Allocator used for temporary memory for AST and ByteCode
-  compiler.
+- `allocator`: Allocators used for temporary compiler objects and finalized
+  return values.
 - `expr`: Lisp expression to evaluate. If multiple expressions are provided, the
-  returned `fizz.Val` will contain the value of the final expression.
+  return value will contain the value of the final expression.
 
 
 ## Extracting Values
 
-Values are extracted using `vm.env.toZig`.
+Values from the Fizz VM are extracted from `fizz.Vm.evalStr`. They can also manually
+be extracted from a `fizz.Val` by calling `vm.env.toZig`.
 
 ```zig
 fn toZig(self: *fizz.Env, comptime T: type, allocator: std.mem.Allocator, val: fizz.Val) !T
@@ -93,7 +105,7 @@ fn toZig(self: *fizz.Env, comptime T: type, allocator: std.mem.Allocator, val: f
 
 ```zig
 fn buildStringInFizz(allocator: std.mem.allocator, vm: *fizz.Vm) ![]const u8 {
-   const val = try vm.evalStr(allocator, "(str-concat (list \"hello\" \" \" \"world\"))");
+   const val = try vm.evalStr(fizz.Val, allocators, "(str-concat (list \"hello\" \" \" \"world\"))");
    const string_val = try vm.env.toZig([]const u8, val);
    return string_val;
 }
@@ -105,7 +117,8 @@ fn buildStringInFizz(allocator: std.mem.allocator, vm: *fizz.Vm) ![]const u8 {
 - `bool`: Either `true` or `false`.
 - `i64`: Fizz integers.
 - `f64`: Can convert from either a Fizz int or a Fizz float.
-- `void`: Converts from none.
+- `void`: Converts from none. None is often returned by expressions that don't
+  typically return values like `(define x 1)`.
 - `[]u8` or `[]const u8`: Converts from Fizz strings.
 - `[]T` or `[]const T`: Converts from a Fizz list where `T` is a supported conversion.
   - Supports nested lists (e.g., `[][]f64`).
@@ -132,8 +145,7 @@ const src = \\(struct
 \\ 'my-list   (list 1 2 3 4)
 \\ 'nested (struct 'a 1 'b 2.0)
 \\)
-const complex_val = try vm.evalStr(allocator, src);
-const result = try vm.env.toZig(TestType, allocator, complex_val);
+const result = try vm.evalStr(TestType, allocators, src);
 defer allocator.free(result.my_string);
 defer allocator.free(result.my_list);
 ```
@@ -179,7 +191,7 @@ fn beep(env: *Vm.Environment, args: []const Vm.Val) Vm.NativeFnError!Vm.Val {
 }
 
 try vm.registerGlobalFn("beep!", beep)
-_ = try vm.evalStr(allocator, "(beep!)")
+_ = try vm.evalStr(fizz.Val, allocator, "(beep!)")
 ```
 
 For some examples, see
