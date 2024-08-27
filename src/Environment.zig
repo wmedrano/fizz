@@ -284,7 +284,8 @@ pub fn deleteModule(self: *Environment, module: *Module) !void {
 /// Compared to the `eval` function present in `Vm`, this function can be called from a native
 /// function as it does not reset the function call and data stacks after execution.
 ///
-/// Note: The returned Val is only valid until the next runGc call.
+/// Note: The returned Val is only valid until the next runGc call. Use `self.toZig` to extend the
+/// lifetime if needed.
 pub fn evalNoReset(self: *Environment, func: Val, args: []const Val) Error!Val {
     self.runtime_stats.function_calls += 1;
     const stack_start = self.stack.items.len;

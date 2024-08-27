@@ -69,7 +69,11 @@ pub fn allocateString(self: *MemoryManager, str: []const u8) ![]const u8 {
         return entry.key_ptr.*;
     }
     const str_copy = try self.allocator.dupe(u8, str);
-    try self.strings.putNoClobber(self.allocator, str_copy, self.reachable_color);
+    try self.strings.put(
+        self.allocator,
+        str_copy,
+        self.reachable_color.swap(),
+    );
     return str_copy;
 }
 
@@ -89,7 +93,11 @@ pub fn allocateUninitializedList(self: *MemoryManager, len: usize) ![]Val {
         return &[0]Val{};
     }
     const lst = try self.allocator.alloc(Val, len);
-    try self.lists.put(self.allocator, lst.ptr, .{ .len = len, .color = self.reachable_color });
+    try self.lists.put(
+        self.allocator,
+        lst.ptr,
+        .{ .len = len, .color = self.reachable_color.swap() },
+    );
     return lst;
 }
 
@@ -111,7 +119,7 @@ pub fn allocateListVal(self: *MemoryManager, contents: []const Val) !Val {
 /// Allocate a new bytecode object.
 pub fn allocateByteCode(self: *MemoryManager, module: *Module) !*ByteCode {
     const bc = try self.allocator.create(ByteCode);
-    try self.bytecode.put(self.allocator, bc, self.reachable_color);
+    try self.bytecode.put(self.allocator, bc, self.reachable_color.swap());
     bc.* = ByteCode{
         .name = "",
         .arg_count = 0,
@@ -126,7 +134,7 @@ pub fn allocateStruct(self: *MemoryManager) !*std.StringHashMapUnmanaged(Val) {
     const m = try self.allocator.create(std.StringHashMapUnmanaged(Val));
     errdefer self.allocator.destroy(m);
     m.* = .{};
-    try self.structs.put(self.allocator, m, self.reachable_color);
+    try self.structs.put(self.allocator, m, self.reachable_color.swap());
     return m;
 }
 
@@ -136,7 +144,12 @@ pub fn markVal(self: *MemoryManager, v: Val) !void {
         .string => |s| try self.strings.put(self.allocator, s, self.reachable_color),
         .symbol => |s| try self.strings.put(self.allocator, s, self.reachable_color),
         .structV => |s| {
-            try self.structs.put(self.allocator, s, self.reachable_color);
+            if (self.structs.getEntry(s)) |entry| {
+                if (entry.value_ptr.* == self.reachable_color) return;
+                entry.value_ptr.* = self.reachable_color;
+            } else {
+                try self.structs.put(self.allocator, s, self.reachable_color);
+            }
             var iter = s.valueIterator();
             while (iter.next()) |structVal| {
                 try self.markVal(structVal.*);
