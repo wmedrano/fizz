@@ -64,7 +64,7 @@ test "golden test" {
         \\$37: true
         \\$38: "------------------------------------------------------------"
         \\$39: "test modules"
-        \\$40: ("*global*" "*test*" "/dev/null")
+        \\$40: ("*global*" "/dev/null" "*default*")
         \\$41: "------------------------------------------------------------"
         \\
     ;
@@ -75,7 +75,7 @@ fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *Vm, expr_number: *
     var compiler = try Compiler.initModule(
         allocator,
         &vm.env,
-        try vm.env.getOrCreateModule(.{ .name = "*test*" }),
+        try vm.env.getOrCreateModule(.{}),
     );
     defer compiler.deinit();
     const ir = try Ir.init(allocator, &[1]Ast.Node{ast.*});

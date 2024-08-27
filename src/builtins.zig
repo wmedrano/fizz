@@ -7,6 +7,7 @@ const std = @import("std");
 pub fn registerAll(env: *Environment) !void {
     try env.global_module.setVal(env, "*define*", .{ .native_fn = .{ .impl = define } });
     try env.global_module.setVal(env, "*modules*", .{ .native_fn = .{ .impl = modules } });
+    try env.global_module.setVal(env, "do", .{ .native_fn = .{ .impl = do } });
     try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
     try env.global_module.setVal(env, "->str", .{ .native_fn = .{ .impl = toStr } });
     try env.global_module.setVal(env, "=", .{ .native_fn = .{ .impl = equal } });
@@ -96,6 +97,11 @@ fn modules(env: *Environment, vals: []const Val) Error!Val {
     }
 
     return .{ .list = ret };
+}
+
+fn do(_: *Environment, vals: []const Val) Error!Val {
+    if (vals.len == 0) return .none;
+    return vals[vals.len - 1];
 }
 
 fn apply(env: *Environment, vals: []const Val) Error!Val {

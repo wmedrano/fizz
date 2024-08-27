@@ -136,17 +136,67 @@ pub const Ir = union(enum) {
     }
 
     pub fn format(self: *const Ir, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        try self.formatImpl(writer, 0);
+    }
+
+    inline fn printIndent(_: *const Ir, writer: anytype, indent: usize, content: []const u8) !void {
+        for (0..indent) |_| try writer.print("  {s}", .{content});
+    }
+
+    fn formatImpl(self: *const Ir, writer: anytype, indent: usize) !void {
+        try self.printIndent(writer, indent, "");
         switch (self.*) {
-            .constant => |c| try writer.print("constant({any}) ", .{c}),
-            .define => |d| try writer.print("define({s}, {any}) ", .{ d.name, d.expr }),
+            .constant => |c| try writer.print("constant({any})", .{c}),
+            .define => |d| {
+                try writer.print("define({s},\n", .{d.name});
+                try d.expr.formatImpl(writer, indent + 1);
+                try writer.print(")", .{});
+            },
             .import_module => |i| try writer.print("import({s})", .{i.path}),
             .deref => |d| try writer.print("deref({s}) ", .{d}),
-            .function_call => |f| try writer.print("funcall({any}, {any}) ", .{ f.function, f.args }),
-            .if_expr => |e| try writer.print("if({any}, {any}, {any}) ", .{ e.predicate, e.true_expr, e.false_expr }),
-            .lambda => |l| try writer.print("lambda({any}) ", .{l.exprs}),
-            .ret => |r| try writer.print("ret({any}) ", .{r.exprs}),
+            .function_call => |f| {
+                try writer.print("funcall(\n", .{});
+                try f.function.formatImpl(writer, indent + 1);
+                try writer.print(",\n", .{});
+                for (f.args, 0..f.args.len) |arg, idx| {
+                    if (idx > 0) try writer.print(",\n", .{});
+                    try arg.formatImpl(writer, indent + 1);
+                }
+                try writer.print(")", .{});
+            },
+            .if_expr => |e| {
+                try writer.print("if(\n", .{});
+                try e.predicate.formatImpl(writer, indent + 1);
+                try writer.print(",\n", .{});
+                try e.true_expr.formatImpl(writer, indent + 1);
+                if (e.false_expr) |fexpr| {
+                    try writer.print(",\n", .{});
+                    try fexpr.formatImpl(writer, indent);
+                }
+                try writer.print(")", .{});
+            },
+            .lambda => |l| {
+                try writer.print("lambda({s}, (", .{l.name});
+                for (l.args, 0..l.args.len) |arg, idx| {
+                    if (idx > 0) try writer.print(", ", .{});
+                    try writer.print("{s}", .{arg});
+                }
+                try writer.print(")\n", .{});
+                for (l.exprs, 0..l.exprs.len) |expr, idx| {
+                    if (idx > 0) try writer.print(",\n", .{});
+                    try expr.formatImpl(writer, indent + 1);
+                }
+                try writer.print(") ", .{});
+            },
+            .ret => |r| {
+                try writer.print("ret(\n", .{});
+                for (r.exprs, 0..r.exprs.len) |expr, idx| {
+                    if (idx > 0) try writer.print(",\n", .{});
+                    try expr.formatImpl(writer, indent + 1);
+                }
+                try writer.print(") ", .{});
+            },
         }
-        try writer.print("\n", .{});
     }
 };
 

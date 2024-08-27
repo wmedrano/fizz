@@ -287,6 +287,7 @@ pub fn deleteModule(self: *Environment, module: *Module) !void {
 pub fn evalNoReset(self: *Environment, func: Val, args: []const Val) Error!Val {
     self.runtime_stats.function_calls += 1;
     const stack_start = self.stack.items.len;
+    // TODO: The following is fragile as it duplicates a lot of executeEval.
     switch (func) {
         .bytecode => |bc| {
             const frame = .{
@@ -295,6 +296,7 @@ pub fn evalNoReset(self: *Environment, func: Val, args: []const Val) Error!Val {
                 .stack_start = stack_start,
                 .ffi_boundary = true,
             };
+            try self.stack.appendNTimes(self.allocator(), .none, bc.locals_count);
             self.frames.appendAssumeCapacity(frame);
             try self.stack.appendSlice(self.allocator(), args);
             while (try self.runNext()) {}
@@ -342,6 +344,7 @@ fn runNext(self: *Environment) Error!bool {
         .jump_if => |n| if (try self.stack.pop().asBool()) {
             frame.instruction += n;
         },
+        .pop => _ = self.stack.pop(),
         .import_module => |path| try self.executeImportModule(frame.bytecode.module, path),
     }
     frame.instruction += 1;

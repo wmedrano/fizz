@@ -48,7 +48,10 @@ test-struct
   (lambda (n)
     (define too-small? (< n 2))
     (if too-small? n
-      (+ (fib (- n 1)) (fib (- n 2))))))
+      (do
+        (define fib-1 (fib (- n 1)))
+	(define fib-2 (fib (- n 2)))
+	(+ fib-1 fib-2)))))
 fib
 (fib 25)
 
