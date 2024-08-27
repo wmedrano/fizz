@@ -81,7 +81,7 @@ fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *Vm, expr_number: *
     const ir = try Ir.init(allocator, &[1]Ast.Node{ast.*});
     defer ir.deinit(allocator);
     const bytecode = try compiler.compile(ir);
-    const res = try vm.eval(bytecode, &.{});
+    const res = try vm.evalFuncVal(bytecode, &.{});
     if (res.tag() != .none) {
         try writer.print("${d}: {any}\n", .{ expr_number.*, res });
         expr_number.* += 1;

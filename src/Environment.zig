@@ -96,6 +96,7 @@ pub fn allocator(self: *const Environment) std.mem.Allocator {
 /// alloc - Allocator used to create strings and slices.
 /// val - The value to convert from.
 pub fn toZig(self: *const Environment, T: type, alloc: std.mem.Allocator, val: Val) !T {
+    if (T == Val) return val;
     if (T == void) {
         if (!val.isNone()) return error.TypeError;
         return;
@@ -283,7 +284,8 @@ pub fn deleteModule(self: *Environment, module: *Module) !void {
 /// Compared to the `eval` function present in `Vm`, this function can be called from a native
 /// function as it does not reset the function call and data stacks after execution.
 ///
-/// Note: The returned Val is only valid until the next runGc call.
+/// Note: The returned Val is only valid until the next runGc call. Use `self.toZig` to extend the
+/// lifetime if needed.
 pub fn evalNoReset(self: *Environment, func: Val, args: []const Val) Error!Val {
     self.runtime_stats.function_calls += 1;
     const stack_start = self.stack.items.len;
@@ -501,20 +503,20 @@ test "can convert to zig struct" {
     var vm = try @import("Vm.zig").init(std.testing.allocator);
     defer vm.deinit();
 
-    _ = try vm.evalStr(std.testing.allocator, "(define string \"string\")");
-    _ = try vm.evalStr(std.testing.allocator, "(define lst (list 0 1 2))");
-    _ = try vm.evalStr(std.testing.allocator, "(define strct (struct 'a-val 1 'b-val 2.0))");
-    const v = try vm.evalStr(
-        std.testing.allocator,
-        "(struct 'string string 'list lst 'strct strct)",
-    );
+    _ = try vm.evalStr(void, std.testing.allocator, "(define string \"string\")");
+    _ = try vm.evalStr(void, std.testing.allocator, "(define lst (list 0 1 2))");
+    _ = try vm.evalStr(void, std.testing.allocator, "(define strct (struct 'a-val 1 'b-val 2.0))");
 
     const TestType = struct {
         string: []const u8,
         list: []const i64,
         strct: struct { a_val: i64, b_val: f64 },
     };
-    const actual = try vm.env.toZig(TestType, std.testing.allocator, v);
+    const actual = try vm.evalStr(
+        TestType,
+        std.testing.allocator,
+        "(struct 'string string 'list lst 'strct strct)",
+    );
     defer std.testing.allocator.free(actual.string);
     defer std.testing.allocator.free(actual.list);
     try std.testing.expectEqualDeep(
@@ -531,11 +533,10 @@ test "can convert to zig slice of structs" {
     var vm = try @import("Vm.zig").init(std.testing.allocator);
     defer vm.deinit();
 
-    _ = try vm.evalStr(std.testing.allocator, "(define x (struct 'a 1 'b 2))");
-    const v = try vm.evalStr(std.testing.allocator, "(list x x x)");
+    try vm.evalStr(void, std.testing.allocator, "(define x (struct 'a 1 'b 2))");
 
     const TestType = struct { a: i64, b: i64 };
-    const actual = try vm.env.toZig([]const TestType, std.testing.allocator, v);
+    const actual = try vm.evalStr([]TestType, std.testing.allocator, "(list x x x)");
     defer std.testing.allocator.free(actual);
     try std.testing.expectEqualDeep(
         &[_]TestType{
@@ -551,19 +552,14 @@ test "partially built struct cleans up" {
     var vm = try @import("Vm.zig").init(std.testing.allocator);
     defer vm.deinit();
 
-    _ = try vm.evalStr(std.testing.allocator, "(define string \"string\")");
-    _ = try vm.evalStr(std.testing.allocator, "(define bad-list (list 0 1 2 \"bad\"))");
-    const v = try vm.evalStr(
-        std.testing.allocator,
-        "(struct 'string string 'list bad-list)",
-    );
-
+    try vm.evalStr(void, std.testing.allocator, "(define string \"string\")");
+    try vm.evalStr(void, std.testing.allocator, "(define bad-list (list 0 1 2 \"bad\"))");
     const TestType = struct {
         string: []const u8,
         list: []const i64,
     };
     try std.testing.expectError(
         error.TypeError,
-        vm.env.toZig(TestType, std.testing.allocator, v),
+        vm.evalStr(TestType, std.testing.allocator, "(struct 'string string 'list bad-list)"),
     );
 }

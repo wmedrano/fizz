@@ -28,6 +28,8 @@ Will focus on:
 - Incorporating user feedback.
 - Performance & API tweaks.
 
+- `Vm.evalStr` returns a Zig type by default.
+
 ### 0.1.1 (Current)
 
 - Add `map` and `filter` functions.
