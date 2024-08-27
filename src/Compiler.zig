@@ -83,13 +83,26 @@ fn compileImpl(self: *Compiler, irs: []const *const Ir) Error!*ByteCode {
     return bc;
 }
 
+const StackAction = enum {
+    /// Does nothing to the stack.
+    none,
+    /// Pushes to the stack.
+    push,
+    /// Returns from the current stack frame, thereby invalidating the current local stack.
+    ret,
+};
+
 /// Returns true if `ir` pushes onto the stack.
-fn pushesToStack(_: *const Compiler, ir: *const Ir) bool {
+fn computeStackAction(_: *const Compiler, ir: *const Ir) StackAction {
     return switch (ir.*) {
-        .define => false,
-        .ret => false,
-        .import_module => false,
-        else => true,
+        .constant => .push,
+        .define => .none,
+        .import_module => .none,
+        .deref => .push,
+        .function_call => .push,
+        .if_expr => .push,
+        .lambda => .push,
+        .ret => .ret,
     };
 }
 
@@ -110,7 +123,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             );
         },
         .define => |def| {
-            if (!self.pushesToStack(def.expr)) return Error.BadSyntax;
+            if (self.computeStackAction(def.expr) != .push) return Error.BadSyntax;
             if (is_module) {
                 const symbol_val = try self.env.memory_manager.allocateSymbolVal(def.name);
                 try self.addIr(bc, def.expr);
@@ -150,10 +163,11 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             }
         },
         .function_call => |f| {
+            if (self.computeStackAction(f.function) == .none) return Error.BadSyntax;
             try self.addIr(bc, f.function);
             var eval_count: usize = 1;
             for (f.args) |arg| {
-                if (self.pushesToStack(arg)) eval_count += 1;
+                if (self.computeStackAction(arg) == .push) eval_count += 1;
                 try self.addIr(bc, arg);
             }
             try bc.instructions.append(
@@ -162,9 +176,9 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             );
         },
         .if_expr => |expr| {
-            if (!self.pushesToStack(expr.predicate)) return Error.BadSyntax;
-            if (!self.pushesToStack(expr.true_expr)) return Error.BadSyntax;
-            if (expr.false_expr) |fe| if (!self.pushesToStack(fe)) return Error.BadSyntax;
+            if (self.computeStackAction(expr.predicate) == .none) return Error.BadSyntax;
+            if (self.computeStackAction(expr.true_expr) == .none) return Error.BadSyntax;
+            if (expr.false_expr) |fe| if (self.computeStackAction(fe) == .none) return Error.BadSyntax;
             const scope_count = self.scopes.scopeCount();
             try self.addIr(bc, expr.predicate);
             self.scopes.retainScopes(scope_count) catch return Error.CompilerBug;

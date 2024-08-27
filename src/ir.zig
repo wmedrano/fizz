@@ -6,7 +6,7 @@ const MemoryManager = @import("MemoryManager.zig");
 /// Holds the intermediate representation. This is somewhere between the AST and bytecode in level
 /// of complexity.
 pub const Ir = union(enum) {
-    /// A single constant value.
+    /// Push a single constant to the stack.
     constant: Const,
     /// A define statement.
     define: struct {
