@@ -44,13 +44,9 @@ nav_order: 1
    ```
 1. Run the code in the VM.
    ```zig
-   const allocators = .{
-	   .compiler_allocator = std.testing.allocator,
-	   .return_value_allocator = std.testing.allocator,
-   };
    const ResultType = struct { numbers: []const i64, numbers_sum: i64 };
-   const result = try vm.evalStr(ResultType, allocators, src);
-   defer allocators.return_value_allocator.free(result.numbers);
+   const result = try vm.evalStr(ResultType, std.testing.allocator, src);
+   defer std.testing.allocator.free(result.numbers);
    ```
 1. Run the garbage collector from time to time.
    ```zig
@@ -69,20 +65,11 @@ can be used to hold any value returned by the VM.
 > allocator is used to extend the lifetime.
 
 ```zig
-/// Contains allocators needed to evaluate an expression.
-pub const EvalAllocators = struct {
-    /// Allocator used by the compiler to allocate temporary memory. Using an arena allocator is
-    /// recommended for best performance.
-    compiler_allocator: std.mem.Allocator,
-    /// Allocator used to construct return value. Only used if the return value contains slices.
-    return_value_allocator: std.mem.Allocator,
-};
-fn evalStr(self: *fizz.Vm, T: type, allocators: fizz.EvalAllocators, expr: []const u8) !T
+fn evalStr(self: *fizz.Vm, T: type, allocator: std.mem.allocator, expr: []const u8) !T
 ```
 
 - `self`: Pointer to the virtual machine.
-- `allocator`: Allocators used for temporary compiler objects and finalized
-  return values.
+- `allocator`: Allocator used to allocate any slices or strings in `T`.
 - `expr`: Lisp expression to evaluate. If multiple expressions are provided, the
   return value will contain the value of the final expression.
 
@@ -105,7 +92,7 @@ fn toZig(self: *fizz.Env, comptime T: type, allocator: std.mem.Allocator, val: f
 
 ```zig
 fn buildStringInFizz(allocator: std.mem.allocator, vm: *fizz.Vm) ![]const u8 {
-   const val = try vm.evalStr(fizz.Val, allocators, "(str-concat (list \"hello\" \" \" \"world\"))");
+   const val = try vm.evalStr(fizz.Val, allocator, "(str-concat (list \"hello\" \" \" \"world\"))");
    const string_val = try vm.env.toZig([]const u8, val);
    return string_val;
 }
@@ -145,7 +132,7 @@ const src = \\(struct
 \\ 'my-list   (list 1 2 3 4)
 \\ 'nested (struct 'a 1 'b 2.0)
 \\)
-const result = try vm.evalStr(TestType, allocators, src);
+const result = try vm.evalStr(TestType, std.testing.allocator, src);
 defer allocator.free(result.my_string);
 defer allocator.free(result.my_list);
 ```

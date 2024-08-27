@@ -503,13 +503,9 @@ test "can convert to zig struct" {
     var vm = try @import("Vm.zig").init(std.testing.allocator);
     defer vm.deinit();
 
-    const allocators = .{
-        .compiler_allocator = std.testing.allocator,
-        .return_value_allocator = std.testing.allocator,
-    };
-    _ = try vm.evalStr(void, allocators, "(define string \"string\")");
-    _ = try vm.evalStr(void, allocators, "(define lst (list 0 1 2))");
-    _ = try vm.evalStr(void, allocators, "(define strct (struct 'a-val 1 'b-val 2.0))");
+    _ = try vm.evalStr(void, std.testing.allocator, "(define string \"string\")");
+    _ = try vm.evalStr(void, std.testing.allocator, "(define lst (list 0 1 2))");
+    _ = try vm.evalStr(void, std.testing.allocator, "(define strct (struct 'a-val 1 'b-val 2.0))");
 
     const TestType = struct {
         string: []const u8,
@@ -518,7 +514,7 @@ test "can convert to zig struct" {
     };
     const actual = try vm.evalStr(
         TestType,
-        allocators,
+        std.testing.allocator,
         "(struct 'string string 'list lst 'strct strct)",
     );
     defer std.testing.allocator.free(actual.string);
@@ -537,14 +533,10 @@ test "can convert to zig slice of structs" {
     var vm = try @import("Vm.zig").init(std.testing.allocator);
     defer vm.deinit();
 
-    const allocators = .{
-        .compiler_allocator = std.testing.allocator,
-        .return_value_allocator = std.testing.allocator,
-    };
-    try vm.evalStr(void, allocators, "(define x (struct 'a 1 'b 2))");
+    try vm.evalStr(void, std.testing.allocator, "(define x (struct 'a 1 'b 2))");
 
     const TestType = struct { a: i64, b: i64 };
-    const actual = try vm.evalStr([]TestType, allocators, "(list x x x)");
+    const actual = try vm.evalStr([]TestType, std.testing.allocator, "(list x x x)");
     defer std.testing.allocator.free(actual);
     try std.testing.expectEqualDeep(
         &[_]TestType{
@@ -560,18 +552,14 @@ test "partially built struct cleans up" {
     var vm = try @import("Vm.zig").init(std.testing.allocator);
     defer vm.deinit();
 
-    const allocators = .{
-        .compiler_allocator = std.testing.allocator,
-        .return_value_allocator = std.testing.allocator,
-    };
-    try vm.evalStr(void, allocators, "(define string \"string\")");
-    try vm.evalStr(void, allocators, "(define bad-list (list 0 1 2 \"bad\"))");
+    try vm.evalStr(void, std.testing.allocator, "(define string \"string\")");
+    try vm.evalStr(void, std.testing.allocator, "(define bad-list (list 0 1 2 \"bad\"))");
     const TestType = struct {
         string: []const u8,
         list: []const i64,
     };
     try std.testing.expectError(
         error.TypeError,
-        vm.evalStr(TestType, allocators, "(struct 'string string 'list bad-list)"),
+        vm.evalStr(TestType, std.testing.allocator, "(struct 'string string 'list bad-list)"),
     );
 }
