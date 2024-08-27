@@ -344,7 +344,7 @@ fn runNext(self: *Environment) Error!bool {
         .jump_if => |n| if (try self.stack.pop().asBool()) {
             frame.instruction += n;
         },
-        .pop => _ = self.stack.pop(),
+        .define => |symbol| try self.executeDefine(frame.bytecode.module, symbol.symbol),
         .import_module => |path| try self.executeImportModule(frame.bytecode.module, path),
     }
     frame.instruction += 1;
@@ -410,6 +410,11 @@ fn executeRet(self: *Environment) !bool {
     self.stack.items = self.stack.items[0..old_frame.stack_start];
     self.stack.items[old_frame.stack_start - 1] = ret;
     return true;
+}
+
+fn executeDefine(self: *Environment, module: *Module, symbol: []const u8) Error!void {
+    const val = self.stack.pop();
+    try module.setVal(self, symbol, val);
 }
 
 fn executeImportModule(self: *Environment, module: *Module, module_path: []const u8) Error!void {

@@ -56,7 +56,7 @@ const ByteCodeValuesIter = struct {
                 .deref_local => {},
                 .deref_global => {},
                 .get_arg => {},
-                .pop => {},
+                .define => |v| return v,
                 .move => {},
                 .eval => {},
                 .jump => {},
@@ -86,12 +86,8 @@ pub const Instruction = union(enum) {
     deref_global: []const u8,
     /// Get the nth value (0-based index) from the base of the current function call stack.
     get_arg: usize,
-    /// Pop the top value of the stack.
-    ///
-    /// TODO: Create `define` instruction as `pop` is only used to implement `define`. This should
-    /// improve performance by reducing the instruction cardinality and number of instructions used
-    /// for define.
-    pop,
+    /// Define a symbol on the current module.
+    define: Val,
     /// Move the top value of the stack into the given index.
     move: usize,
     /// Evaluate the top n elements of the stack. The deepmost value should be a function.
@@ -135,7 +131,7 @@ pub const Instruction = union(enum) {
             .jump_if => |n| try writer.print("jump_if({d})", .{n}),
             .import_module => |m| try writer.print("import({s})", .{m}),
             .ret => try writer.print("ret()", .{}),
-            .pop => try writer.print("pop()", .{}),
+            .define => |sym| try writer.print("define({s})", .{sym}),
         }
     }
 };

@@ -23,6 +23,7 @@ module: *Module,
 /// If a module is being compiled. This enables special behavior such as:
 ///   - Define statements set values within the module.
 is_module: bool = false,
+
 /// The values that are defined in `module`.
 module_defined_vals: std.StringHashMap(void),
 
@@ -109,20 +110,13 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             );
         },
         .define => |def| {
+            if (!self.pushesToStack(def.expr)) return Error.BadSyntax;
             if (is_module) {
-                try bc.instructions.append(
-                    self.env.allocator(),
-                    .{ .push_const = self.env.global_module.getVal("*define*") orelse @panic("builtin *define* not available") },
-                );
-                try bc.instructions.append(
-                    self.env.allocator(),
-                    .{ .push_const = try self.env.memory_manager.allocateSymbolVal(def.name) },
-                );
+                const symbol_val = try self.env.memory_manager.allocateSymbolVal(def.name);
                 try self.addIr(bc, def.expr);
-                try bc.instructions.appendSlice(
+                try bc.instructions.append(
                     self.env.allocator(),
-                    // A pop is needed as pushesToStack returns false for define.
-                    &[_]ByteCode.Instruction{ .{ .eval = 3 }, .pop },
+                    .{ .define = symbol_val },
                 );
             } else {
                 const local_idx = try self.scopes.addVariable(def.name);
@@ -314,16 +308,10 @@ test "module with define expressions" {
             .locals_count = 0,
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{
-                    .{ .push_const = env.global_module.getVal("*define*").? },
-                    .{ .push_const = try env.memory_manager.allocateSymbolVal("pi") },
                     .{ .push_const = .{ .float = 3.14 } },
-                    .{ .eval = 3 },
-                    .pop,
-                    .{ .push_const = env.global_module.getVal("*define*").? },
-                    .{ .push_const = try env.memory_manager.allocateSymbolVal("e") },
+                    .{ .define = .{ .symbol = "pi" } },
                     .{ .push_const = .{ .float = 2.718 } },
-                    .{ .eval = 3 },
-                    .pop,
+                    .{ .define = .{ .symbol = "e" } },
                     .ret,
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
