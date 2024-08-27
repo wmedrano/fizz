@@ -123,6 +123,7 @@ pub fn allocateByteCode(self: *MemoryManager, module: *Module) !*ByteCode {
     bc.* = ByteCode{
         .name = "",
         .arg_count = 0,
+        .locals_count = 0,
         .instructions = .{},
         .module = module,
     };

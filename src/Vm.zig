@@ -150,7 +150,7 @@ test "recursive function can eval" {
         55,
         try vm.evalStr(i64, std.testing.allocator, "(fib 10)"),
     );
-    try std.testing.expectEqualDeep(621, vm.env.runtime_stats.function_calls);
+    try std.testing.expectEqualDeep(620, vm.env.runtime_stats.function_calls);
 }
 
 test "can only deref symbols from the same module" {

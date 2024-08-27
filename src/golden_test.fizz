@@ -5,6 +5,13 @@ test-define
 (define test-define "redefined")
 test-define
 
+(define lambda-with-defines
+  (lambda ()
+    (define a 100)
+    (define b 200)
+    (+ a b a b)))
+(lambda-with-defines)
+
 "------------------------------------------------------------"
 "test functions"
 (define pi 3.14)
@@ -46,8 +53,12 @@ test-struct
 "test fib"
 (define fib
   (lambda (n)
-    (if (< n 2) n
-      (+ (fib (- n 1)) (fib (- n 2))))))
+    (define too-small? (< n 2))
+    (if too-small? n
+      (do
+        (define fib-1 (fib (- n 1)))
+	(define fib-2 (fib (- n 2)))
+	(+ fib-1 fib-2)))))
 fib
 (fib 25)
 

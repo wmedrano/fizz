@@ -5,8 +5,8 @@ const Error = Val.NativeFn.Error;
 const std = @import("std");
 
 pub fn registerAll(env: *Environment) !void {
-    try env.global_module.setVal(env, "*define*", .{ .native_fn = .{ .impl = define } });
     try env.global_module.setVal(env, "*modules*", .{ .native_fn = .{ .impl = modules } });
+    try env.global_module.setVal(env, "do", .{ .native_fn = .{ .impl = do } });
     try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
     try env.global_module.setVal(env, "->str", .{ .native_fn = .{ .impl = toStr } });
     try env.global_module.setVal(env, "=", .{ .native_fn = .{ .impl = equal } });
@@ -70,18 +70,6 @@ fn equal(_: *Environment, vals: []const Val) Error!Val {
     return .{ .boolean = try equalImpl(vals[0], vals[1]) };
 }
 
-fn define(env: *Environment, vals: []const Val) Error!Val {
-    if (vals.len != 2) return Error.ArrityError;
-    const module = env.frames.items[env.frames.items.len - 1].bytecode.module;
-    switch (vals[0]) {
-        .symbol => |s| {
-            module.setVal(env, s, vals[1]) catch return Error.RuntimeError;
-        },
-        else => return Error.TypeError,
-    }
-    return .none;
-}
-
 fn modules(env: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 0) return Error.ArrityError;
     const module_count = 1 + env.modules.count();
@@ -96,6 +84,11 @@ fn modules(env: *Environment, vals: []const Val) Error!Val {
     }
 
     return .{ .list = ret };
+}
+
+fn do(_: *Environment, vals: []const Val) Error!Val {
+    if (vals.len == 0) return .none;
+    return vals[vals.len - 1];
 }
 
 fn apply(env: *Environment, vals: []const Val) Error!Val {

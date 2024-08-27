@@ -289,6 +289,7 @@ pub fn deleteModule(self: *Environment, module: *Module) !void {
 pub fn evalNoReset(self: *Environment, func: Val, args: []const Val) Error!Val {
     self.runtime_stats.function_calls += 1;
     const stack_start = self.stack.items.len;
+    // TODO: The following is fragile as it duplicates a lot of executeEval.
     switch (func) {
         .bytecode => |bc| {
             const frame = .{
@@ -297,6 +298,7 @@ pub fn evalNoReset(self: *Environment, func: Val, args: []const Val) Error!Val {
                 .stack_start = stack_start,
                 .ffi_boundary = true,
             };
+            try self.stack.appendNTimes(self.allocator(), .none, bc.locals_count);
             self.frames.appendAssumeCapacity(frame);
             try self.stack.appendSlice(self.allocator(), args);
             while (try self.runNext()) {}
@@ -323,6 +325,7 @@ fn runNext(self: *Environment) Error!bool {
     var frame = &self.frames.items[self.frames.items.len - 1];
     switch (frame.instruction[0]) {
         .get_arg => |idx| try self.executeGetArg(frame, idx),
+        .move => |idx| try self.executeMove(frame, idx),
         .push_const => |v| try self.executePushConst(v),
         .ret => {
             const should_continue = try self.executeRet();
@@ -343,6 +346,7 @@ fn runNext(self: *Environment) Error!bool {
         .jump_if => |n| if (try self.stack.pop().asBool()) {
             frame.instruction += n;
         },
+        .define => |symbol| try self.executeDefine(frame.bytecode.module, symbol.symbol),
         .import_module => |path| try self.executeImportModule(frame.bytecode.module, path),
     }
     frame.instruction += 1;
@@ -365,6 +369,11 @@ fn executeGetArg(self: *Environment, frame: *const Frame, idx: usize) !void {
     try self.stack.append(self.allocator(), v);
 }
 
+fn executeMove(self: *Environment, frame: *const Frame, idx: usize) !void {
+    const v = self.stack.popOrNull() orelse return error.RuntimeError;
+    self.stack.items[frame.stack_start + idx] = v;
+}
+
 fn executeEval(self: *Environment, frame: *const Frame, n: usize) !void {
     self.runtime_stats.function_calls += 1;
     const norm_n: usize = if (n == 0) self.stack.items.len - frame.stack_start else n;
@@ -375,6 +384,7 @@ fn executeEval(self: *Environment, frame: *const Frame, n: usize) !void {
     switch (func) {
         .bytecode => |bc| {
             if (bc.arg_count != arg_count) return error.ArrityError;
+            try self.stack.appendNTimes(self.allocator(), .none, bc.locals_count);
             const new_frame = Frame{
                 .bytecode = bc,
                 .instruction = bc.instructions.items.ptr,
@@ -402,6 +412,11 @@ fn executeRet(self: *Environment) !bool {
     self.stack.items = self.stack.items[0..old_frame.stack_start];
     self.stack.items[old_frame.stack_start - 1] = ret;
     return true;
+}
+
+fn executeDefine(self: *Environment, module: *Module, symbol: []const u8) Error!void {
+    const val = self.stack.pop();
+    try module.setVal(self, symbol, val);
 }
 
 fn executeImportModule(self: *Environment, module: *Module, module_path: []const u8) Error!void {

@@ -29,6 +29,7 @@ Will focus on:
 - Performance & API tweaks.
 
 - `Vm.evalStr` returns a Zig type by default.
+- Allow define within subexpressions.
 
 ### 0.1.1 (Current)
 

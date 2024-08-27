@@ -2,7 +2,7 @@ const Module = @This();
 
 const Environment = @import("Environment.zig");
 const Val = @import("val.zig").Val;
-const iter = @import("iter.zig");
+const iter = @import("datastructures/iter.zig");
 const std = @import("std");
 
 /// The name of the module. This string is owned and managed by Module.
