@@ -28,7 +28,11 @@ Will focus on:
 - Incorporating user feedback.
 - Performance & API tweaks.
 
-### 0.1.0 (Current)
+### 0.1.1 (Current)
+
+- Add `map` and `filter` functions.
+
+### 0.1.0
 
 Status: Target feature set implemented. In validation phase.
 
