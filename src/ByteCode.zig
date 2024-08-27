@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 
 name: []const u8,
 arg_count: usize,
+locals_count: usize,
 instructions: std.ArrayListUnmanaged(Instruction),
 module: *Module,
 
@@ -34,9 +35,12 @@ pub fn format(
     writer: anytype,
 ) !void {
     try writer.print(
-        "{{ .name = {s}, .arg_count = {d}, .instructions = {any} }}",
-        .{ self.name, self.arg_count, self.instructions.items },
+        "{{ .name = {s}, .arg_count = {d}, .locals_count = {d}, .instructions =\n",
+        .{ self.name, self.arg_count, self.locals_count },
     );
+    for (self.instructions.items, 0..self.instructions.items.len) |instruction, idx| {
+        try writer.print("  {d}: {any}\n", .{ idx, instruction });
+    }
 }
 
 const ByteCodeValuesIter = struct {
@@ -52,6 +56,8 @@ const ByteCodeValuesIter = struct {
                 .deref_local => {},
                 .deref_global => {},
                 .get_arg => {},
+                .define => |v| return v,
+                .move => {},
                 .eval => {},
                 .jump => {},
                 .jump_if => {},
@@ -80,6 +86,10 @@ pub const Instruction = union(enum) {
     deref_global: []const u8,
     /// Get the nth value (0-based index) from the base of the current function call stack.
     get_arg: usize,
+    /// Define a symbol on the current module.
+    define: Val,
+    /// Move the top value of the stack into the given index.
+    move: usize,
     /// Evaluate the top n elements of the stack. The deepmost value should be a function.
     eval: usize,
     /// Jump instructions in the bytecode.
@@ -115,11 +125,13 @@ pub const Instruction = union(enum) {
             .deref_global => |sym| try writer.print("deref_global({s})", .{sym}),
             .deref_local => |sym| try writer.print("deref_local({s})", .{sym}),
             .get_arg => |n| try writer.print("get_arg({d})", .{n}),
+            .move => |n| try writer.print("move({d})", .{n}),
             .eval => |n| try writer.print("eval({d})", .{n}),
             .jump => |n| try writer.print("jump({d})", .{n}),
             .jump_if => |n| try writer.print("jump_if({d})", .{n}),
             .import_module => |m| try writer.print("import({s})", .{m}),
             .ret => try writer.print("ret()", .{}),
+            .define => |sym| try writer.print("define({s})", .{sym}),
         }
     }
 };

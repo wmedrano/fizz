@@ -28,6 +28,8 @@ Will focus on:
 - Incorporating user feedback.
 - Performance & API tweaks.
 
+- Allow define within subexpressions.
+
 ### 0.1.1 (Current)
 
 - Add `map` and `filter` functions.
