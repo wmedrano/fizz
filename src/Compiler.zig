@@ -5,7 +5,7 @@ const Val = @import("val.zig").Val;
 const Compiler = @This();
 const Environment = @import("Environment.zig");
 const Module = @import("Module.zig");
-const ScopeManager = @import("compiler/ScopeManager.zig");
+const ScopeManager = @import("datastructures/ScopeManager.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
