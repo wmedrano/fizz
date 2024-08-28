@@ -2,6 +2,7 @@ const std = @import("std");
 const Val = @import("val.zig").Val;
 const Ast = @import("Ast.zig");
 const MemoryManager = @import("MemoryManager.zig");
+const ErrorCollector = @import("datastructures/ErrorCollector.zig");
 
 /// Holds the intermediate representation. This is somewhere between the AST and bytecode in level
 /// of complexity.
@@ -69,9 +70,10 @@ pub const Ir = union(enum) {
     };
 
     /// Initialize an Ir from an AST.
-    pub fn init(allocator: std.mem.Allocator, ast: []const Ast.Node) !*Ir {
+    pub fn init(allocator: std.mem.Allocator, errors: *ErrorCollector, ast: []const Ast.Node) !*Ir {
         var builder = IrBuilder{
             .allocator = allocator,
+            .errors = errors,
             .arg_to_idx = .{},
         };
         const exprs = try allocator.alloc(*Ir, ast.len);
@@ -90,10 +92,10 @@ pub const Ir = union(enum) {
     }
 
     /// Initialize an Ir from a string expression.
-    pub fn initStrExpr(allocator: std.mem.Allocator, expr: []const u8) !*Ir {
-        var asts = try Ast.initWithStr(allocator, expr);
+    pub fn initStrExpr(allocator: std.mem.Allocator, errors: *ErrorCollector, expr: []const u8) !*Ir {
+        var asts = try Ast.initWithStr(allocator, errors, expr);
         defer asts.deinit();
-        return init(allocator, asts.asts);
+        return init(allocator, errors, asts.asts);
     }
 
     /// Populate define_set with all symbols that are defined.
@@ -202,6 +204,7 @@ pub const Ir = union(enum) {
 
 const IrBuilder = struct {
     allocator: std.mem.Allocator,
+    errors: *ErrorCollector,
     arg_to_idx: std.StringHashMapUnmanaged(usize),
 
     const Error = Ir.Error;
@@ -212,6 +215,7 @@ const IrBuilder = struct {
             .leaf => return self.buildLeaf(&ast.leaf),
             .tree => |asts| {
                 if (asts.len == 0) {
+                    try self.errors.addError(.{ .msg = "Got 0 expressions but expected at least 1." });
                     return Error.SyntaxError;
                 }
                 const first = &asts[0];
@@ -222,27 +226,43 @@ const IrBuilder = struct {
                             .keyword => |k| switch (k) {
                                 .if_expr => {
                                     switch (rest.len) {
-                                        0 | 1 => return Error.SyntaxError,
+                                        0 | 1 => {
+                                            try self.errors.addError(.{ .msg = "If expression expected at least 1 arg" });
+                                            return Error.SyntaxError;
+                                        },
                                         2 => return self.buildIfExpression(&rest[0], &rest[1], null),
                                         3 => return self.buildIfExpression(&rest[0], &rest[1], &rest[2]),
-                                        else => return Error.SyntaxError,
+                                        else => {
+                                            try self.errors.addError(.{ .msg = "If expression expected at most 3 args" });
+                                            return Error.SyntaxError;
+                                        },
                                     }
                                 },
                                 .lambda => {
                                     if (rest.len < 2) {
+                                        try self.errors.addError(.{ .msg = "lambda expected form (lambda (<args>...) <exprs>...)" });
                                         return Error.SyntaxError;
                                     }
                                     return self.buildLambdaExpr(name, &rest[0], rest[1..]);
                                 },
                                 .define => {
                                     switch (rest.len) {
-                                        0 | 1 => return Error.SyntaxError,
+                                        0 | 1 => {
+                                            try self.errors.addError(.{ .msg = "define expected form (define <ident> <expr>)" });
+                                            return Error.SyntaxError;
+                                        },
                                         2 => return self.buildDefine(&rest[0], &rest[1]),
-                                        else => return Error.SyntaxError,
+                                        else => {
+                                            try self.errors.addError(.{ .msg = "define expected form (define <ident> <expr>)" });
+                                            return Error.SyntaxError;
+                                        },
                                     }
                                 },
                                 .import => {
-                                    if (rest.len != 1) return Error.SyntaxError;
+                                    if (rest.len != 1) {
+                                        try self.errors.addError(.{ .msg = "import expected form (import \"<path>\")" });
+                                        return Error.SyntaxError;
+                                    }
                                     return self.buildImportModule(&rest[0]);
                                 },
                             },
@@ -262,7 +282,10 @@ const IrBuilder = struct {
     /// Build an Ir from a single AST leaf.
     fn buildLeaf(self: *IrBuilder, leaf: *const Ast.Node.Leaf) Error!*Ir {
         const v = switch (leaf.*) {
-            .keyword => return Error.SyntaxError,
+            .keyword => {
+                try self.errors.addError(.{ .msg = "found unexpected keyword" });
+                return Error.SyntaxError;
+            },
             .identifier => |ident| if (ident.len != 0 and ident[0] == 39)
                 Ir.Const{ .symbol = ident[1..] }
             else
@@ -289,10 +312,16 @@ const IrBuilder = struct {
 
     fn buildDefine(self: *IrBuilder, sym: *const Ast.Node, def: *const Ast.Node) Error!*Ir {
         const name = switch (sym.*) {
-            .tree => return Error.SyntaxError,
+            .tree => {
+                try self.errors.addError(.{ .msg = "define expected form (define <ident> <expr>) but <ident> was malformed" });
+                return Error.SyntaxError;
+            },
             .leaf => |l| switch (l) {
                 .identifier => |ident| ident,
-                else => return Error.SyntaxError,
+                else => {
+                    try self.errors.addError(.{ .msg = "define expected form (define <ident> <expr>) but <ident> was malformed" });
+                    return Error.SyntaxError;
+                },
             },
         };
         var expr = try self.build(name, def);
@@ -310,10 +339,20 @@ const IrBuilder = struct {
 
     fn buildImportModule(self: *IrBuilder, path_expr: *const Ast.Node) Error!*Ir {
         const path = switch (path_expr.*) {
-            .tree => return Error.SyntaxError,
+            .tree => {
+                try self.errors.addError(
+                    .{ .msg = "import expected form (import \"<path>\") but path was malformed" },
+                );
+                return Error.SyntaxError;
+            },
             .leaf => |l| switch (l) {
                 .string => |ident| ident,
-                else => return Error.SyntaxError,
+                else => {
+                    try self.errors.addError(
+                        .{ .msg = "import expected form (import \"<path>\") but path was malformed" },
+                    );
+                    return Error.SyntaxError;
+                },
             },
         };
         const ret = try self.allocator.create(Ir);
@@ -356,33 +395,54 @@ const IrBuilder = struct {
         errdefer if (false_ir) |i| i.deinit(self.allocator);
 
         const ret = try self.allocator.create(Ir);
-        ret.* = .{ .if_expr = .{
-            .predicate = pred_ir,
-            .true_expr = true_ir,
-            .false_expr = false_ir,
-        } };
+        ret.* = .{
+            .if_expr = .{
+                .predicate = pred_ir,
+                .true_expr = true_ir,
+                .false_expr = false_ir,
+            },
+        };
         return ret;
     }
 
     /// Build an Ir containing a lambda definition.
     fn buildLambdaExpr(self: *IrBuilder, name: []const u8, arguments: *const Ast.Node, body: []const Ast.Node) Error!*Ir {
         if (body.len == 0) {
+            try self.errors.addError(
+                .{ .msg = "lambda expected form (lambda (<args>...) <exprs>...) but found 0 exprs" },
+            );
             return Error.SyntaxError;
         }
         var lambda_builder = IrBuilder{
             .allocator = self.allocator,
+            .errors = self.errors,
             .arg_to_idx = .{},
         };
         defer lambda_builder.deinit();
         switch (arguments.*) {
-            .leaf => return Error.SyntaxError,
+            .leaf => {
+                try self.errors.addError(.{
+                    .msg = "lambda expected form (lambda (<args>...) <exprs>...) but found args were not enclosed in parenthesis",
+                });
+                return Error.SyntaxError;
+            },
             .tree => |t| {
                 for (0.., t) |arg_idx, arg_name_ast| {
                     switch (arg_name_ast) {
-                        .tree => return Error.SyntaxError,
+                        .tree => {
+                            try self.errors.addError(.{
+                                .msg = "lambda expected form (lambda (<args>...) <exprs>...) but found args were not valid identifiers",
+                            });
+                            return Error.SyntaxError;
+                        },
                         .leaf => |l| switch (l) {
                             .identifier => |ident| try lambda_builder.arg_to_idx.put(self.allocator, ident, arg_idx),
-                            else => return Error.SyntaxError,
+                            else => {
+                                try self.errors.addError(.{
+                                    .msg = "lambda expected form (lambda (<args>...) <exprs>...) but found args were not valid identifiers",
+                                });
+                                return Error.SyntaxError;
+                            },
                         },
                     }
                 }
@@ -409,7 +469,9 @@ const IrBuilder = struct {
 };
 
 test "parse constant expression" {
-    var actual = try Ir.initStrExpr(std.testing.allocator, "1");
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var actual = try Ir.initStrExpr(std.testing.allocator, &errors, "1");
     defer actual.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(
         &Ir{
@@ -424,7 +486,9 @@ test "parse constant expression" {
 }
 
 test "parse simple expression" {
-    var actual = try Ir.initStrExpr(std.testing.allocator, "(+ 1 2)");
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var actual = try Ir.initStrExpr(std.testing.allocator, &errors, "(+ 1 2)");
     defer actual.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(&Ir{
         .ret = .{
@@ -444,7 +508,9 @@ test "parse simple expression" {
 }
 
 test "parse define statement" {
-    var actual = try Ir.initStrExpr(std.testing.allocator, "(define x 12)");
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var actual = try Ir.initStrExpr(std.testing.allocator, &errors, "(define x 12)");
     defer actual.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(&Ir{
         .ret = .{
@@ -461,7 +527,9 @@ test "parse define statement" {
 }
 
 test "parse if expression" {
-    var actual = try Ir.initStrExpr(std.testing.allocator, "(if true 1 2)");
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var actual = try Ir.initStrExpr(std.testing.allocator, &errors, "(if true 1 2)");
     defer actual.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(&Ir{ .ret = .{
         .exprs = @constCast(&[_]*Ir{
@@ -477,7 +545,9 @@ test "parse if expression" {
 }
 
 test "parse if expression with no false branch" {
-    var actual = try Ir.initStrExpr(std.testing.allocator, "(if true 1)");
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var actual = try Ir.initStrExpr(std.testing.allocator, &errors, "(if true 1)");
     defer actual.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(&Ir{
         .ret = .{
@@ -495,7 +565,9 @@ test "parse if expression with no false branch" {
 }
 
 test "parse lambda" {
-    var actual = try Ir.initStrExpr(std.testing.allocator, "(lambda (a b) (+ a b) (- a b))");
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var actual = try Ir.initStrExpr(std.testing.allocator, &errors, "(lambda (a b) (+ a b) (- a b))");
     defer actual.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(&Ir{
         .ret = .{
@@ -532,21 +604,29 @@ test "parse lambda" {
 }
 
 test "lambda with no body produces error" {
-    try std.testing.expectError(error.SyntaxError, Ir.initStrExpr(std.testing.allocator, "(lambda (a b))"));
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    try std.testing.expectError(error.SyntaxError, Ir.initStrExpr(std.testing.allocator, &errors, "(lambda (a b))"));
 }
 
 test "lambda with no arguments produces error" {
-    try std.testing.expectError(error.SyntaxError, Ir.initStrExpr(std.testing.allocator, "(lambda)"));
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    try std.testing.expectError(error.SyntaxError, Ir.initStrExpr(std.testing.allocator, &errors, "(lambda)"));
 }
 
 test "lambda with improper args produces error" {
-    var works = try Ir.initStrExpr(std.testing.allocator, "(lambda () true)");
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var works = try Ir.initStrExpr(std.testing.allocator, &errors, "(lambda () true)");
     works.deinit(std.testing.allocator);
-    try std.testing.expectError(error.SyntaxError, Ir.initStrExpr(std.testing.allocator, "(lambda not-a-list true)"));
+    try std.testing.expectError(error.SyntaxError, Ir.initStrExpr(std.testing.allocator, &errors, "(lambda not-a-list true)"));
 }
 
 test "define on lambda produces named function" {
-    var actual = try Ir.initStrExpr(std.testing.allocator, "(define foo (lambda () (lambda () 10)))");
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var actual = try Ir.initStrExpr(std.testing.allocator, &errors, "(define foo (lambda () (lambda () 10)))");
     defer actual.deinit(std.testing.allocator);
     try std.testing.expectEqualDeep(&Ir{
         .ret = .{
@@ -576,13 +656,17 @@ test "define on lambda produces named function" {
 }
 
 test "nested badly formed lambda produces error" {
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
     try std.testing.expectError(
         Ir.Error.SyntaxError,
-        Ir.initStrExpr(std.testing.allocator, "(define foo (lambda () (lambda ())))"),
+        Ir.initStrExpr(std.testing.allocator, &errors, "(define foo (lambda () (lambda ())))"),
     );
 }
 
 test "definedVals visits all defined values" {
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
     const ir = &Ir{
         .ret = .{
             .exprs = @constCast(&[_]*Ir{

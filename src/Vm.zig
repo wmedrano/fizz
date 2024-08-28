@@ -4,6 +4,7 @@ const Compiler = @import("Compiler.zig");
 const Ir = @import("ir.zig").Ir;
 const Module = @import("Module.zig");
 const std = @import("std");
+const ErrorCollector = @import("datastructures/ErrorCollector.zig");
 
 pub const Environment = @import("Environment.zig");
 pub const Error = Environment.Error;
@@ -35,7 +36,7 @@ pub fn evalStr(self: *Vm, T: type, allocator: std.mem.Allocator, expr: []const u
     var tmp_arena = std.heap.ArenaAllocator.init(self.env.allocator());
     defer tmp_arena.deinit();
     const tmp_allocator = tmp_arena.allocator();
-    const ir = try Ir.initStrExpr(tmp_allocator, expr);
+    const ir = try Ir.initStrExpr(tmp_allocator, &self.env.errors, expr);
     var compiler = try Compiler.initModule(tmp_allocator, &self.env, try self.env.getOrCreateModule(.{}));
     const bc = try compiler.compile(ir);
     const ret_val = try self.evalFuncVal(bc, &.{});
