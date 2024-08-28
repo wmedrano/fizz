@@ -56,10 +56,22 @@ Fizz is built in Zig and meant to easily integrate into a Zig codebase.
 
 ```zig
 const fizz = @import("fizz");
-var vm = try fizz.Vm.init(std.testing.allocator);
-defer vm.deinit();
 
-const actual = try vm.evalStr([]i64, std.testing.allocator, "(list 1 2 3 4)");
-defer std.testing.allocator.free(actual);
-try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
+fn quack(_: *fizz.Environment, _: []const fizz.Val) fizz.NativeFnError!fizz.Val {
+	std.debug.print("Quack!\n", .{});
+	return .none;
+}
+
+pub fn example(allocator: std.mem.Allocator) !void {
+    var vm = try fizz.Vm.init(allocator);
+    defer vm.deinit();
+    errdefer std.debug.print("Fizz VM failed:\n{any}\n", .{vm.env.errors});
+
+    const actual = try vm.evalStr([]i64, allocator, "(list 1 2 3 4)");
+    defer allocator.free(actual);
+    try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
+
+    try vm.registerGlobalFn("quack!", quack);
+    try vm.evalStr(void, allocator, "(quack!)");
+}
 ```
