@@ -1,16 +1,26 @@
 const Ast = @This();
 const std = @import("std");
 const Tokenizer = @import("Tokenizer.zig");
+const ErrorCollector = @import("datastructures/ErrorCollector.zig");
 
 /// The Allocator that was used to allocate the ASTs.
 allocator: std.mem.Allocator,
 /// The nodes under the AST.
 asts: []const Node,
 
+const SyntaxError = error{
+    /// An unclosed parenthesis. Example: (this-is-not-closed
+    UnclosedParenthesis,
+    /// There was a close parenthesis with no open parenthesis. Example: this-is-not-closed)
+    UnmatchedCloseParenthesis,
+    /// Ran out of memory while parsing the syntax.
+    OutOfMemory,
+};
+
 /// Creates a new Ast. Some fields may reference data from the tokenizer. Other items will use
 /// allocator to allocate memory.
-pub fn init(allocator: std.mem.Allocator, t: *Tokenizer) SyntaxError!Ast {
-    const asts = try Ast.initImpl(allocator, t, false);
+pub fn init(allocator: std.mem.Allocator, errors: *ErrorCollector, t: *Tokenizer) SyntaxError!Ast {
+    const asts = try Ast.initImpl(allocator, errors, t, false);
     return .{
         .allocator = allocator,
         .asts = asts,
@@ -19,9 +29,9 @@ pub fn init(allocator: std.mem.Allocator, t: *Tokenizer) SyntaxError!Ast {
 
 /// Create a new Ast with src as the source code. The created ASTs may reference bytes
 /// from the src string.
-pub fn initWithStr(allocator: std.mem.Allocator, src: []const u8) SyntaxError!Ast {
+pub fn initWithStr(allocator: std.mem.Allocator, errors: *ErrorCollector, src: []const u8) SyntaxError!Ast {
     var t = Tokenizer.init(src);
-    return Ast.init(allocator, &t);
+    return Ast.init(allocator, errors, &t);
 }
 
 /// Deallocate all ASTs within the collection.
@@ -41,7 +51,7 @@ fn deinitNodeSlice(allocator: std.mem.Allocator, ast: []const Node) void {
     allocator.free(ast);
 }
 
-fn initImpl(allocator: std.mem.Allocator, t: *Tokenizer, want_close: bool) SyntaxError![]Node {
+fn initImpl(allocator: std.mem.Allocator, errors: *ErrorCollector, t: *Tokenizer, want_close: bool) SyntaxError![]Node {
     var result = std.ArrayList(Node).init(allocator);
     defer result.deinit();
     errdefer for (result.items) |r| {
@@ -55,11 +65,12 @@ fn initImpl(allocator: std.mem.Allocator, t: *Tokenizer, want_close: bool) Synta
         switch (token.typ) {
             .whitespace => continue,
             .openParen => {
-                const sub_asts = try Ast.initImpl(allocator, t, true);
+                const sub_asts = try Ast.initImpl(allocator, errors, t, true);
                 try result.append(.{ .tree = sub_asts });
             },
             .closeParen => {
                 if (!want_close) {
+                    try errors.addError(.{ .msg = "Unmatched close parenthesis" });
                     return SyntaxError.UnmatchedCloseParenthesis;
                 }
                 has_close = true;
@@ -76,6 +87,7 @@ fn initImpl(allocator: std.mem.Allocator, t: *Tokenizer, want_close: bool) Synta
         }
     }
     if (want_close and !has_close) {
+        try errors.addError(.{ .msg = "Unclosed parenthesis" });
         return SyntaxError.UnclosedParenthesis;
     }
     return try result.toOwnedSlice();
@@ -184,18 +196,11 @@ pub const Node = union(enum) {
     }
 };
 
-const SyntaxError = error{
-    /// An unclosed parenthesis. Example: (this-is-not-closed
-    UnclosedParenthesis,
-    /// There was a close parenthesis with no open parenthesis. Example: this-is-not-closed)
-    UnmatchedCloseParenthesis,
-    /// Ran out of memory while parsing the syntax.
-    OutOfMemory,
-};
-
 test "basic expression is parsed" {
     var t = Tokenizer.init("(define + 1 2.1 (string-length \"hello\") (if true 10) (if false 11 12))");
-    var ast = try Ast.init(std.testing.allocator, &t);
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var ast = try Ast.init(std.testing.allocator, &errors, &t);
     defer ast.deinit();
 
     try std.testing.expectEqualDeep(Ast{
@@ -230,7 +235,9 @@ test "basic expression is parsed" {
 
 test "lambda is parsed" {
     var t = Tokenizer.init("(lambda (a b) (+ a b))");
-    var ast = try Ast.init(std.testing.allocator, &t);
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var ast = try Ast.init(std.testing.allocator, &errors, &t);
     defer ast.deinit();
 
     try std.testing.expectEqualDeep(Ast{
@@ -256,7 +263,9 @@ test "lambda is parsed" {
 
 test "multiple expressions can be parsed" {
     var t = Tokenizer.init("1 2.3 four \"five\"");
-    var ast = try Ast.init(std.testing.allocator, &t);
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    var ast = try Ast.init(std.testing.allocator, &errors, &t);
     defer ast.deinit();
 
     try std.testing.expectEqualDeep(Ast{
@@ -272,18 +281,24 @@ test "multiple expressions can be parsed" {
 
 test "unmatched closing brace is error" {
     var t = Tokenizer.init("())");
-    const ast_or_err = Ast.init(std.testing.allocator, &t);
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    const ast_or_err = Ast.init(std.testing.allocator, &errors, &t);
     try std.testing.expectError(SyntaxError.UnmatchedCloseParenthesis, ast_or_err);
 }
 
 test "unmatched opening brace is error" {
     var t = Tokenizer.init("(()");
-    const ast_or_err = Ast.init(std.testing.allocator, &t);
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    const ast_or_err = Ast.init(std.testing.allocator, &errors, &t);
     try std.testing.expectError(SyntaxError.UnclosedParenthesis, ast_or_err);
 }
 
 test "error on second expression is detected" {
     var t = Tokenizer.init("(+ 1 2 3) ))");
-    const ast_or_err = Ast.init(std.testing.allocator, &t);
+    var errors = ErrorCollector.init(std.testing.allocator);
+    defer errors.deinit();
+    const ast_or_err = Ast.init(std.testing.allocator, &errors, &t);
     try std.testing.expectError(SyntaxError.UnmatchedCloseParenthesis, ast_or_err);
 }

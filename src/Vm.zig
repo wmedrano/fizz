@@ -4,6 +4,7 @@ const Compiler = @import("Compiler.zig");
 const Ir = @import("ir.zig").Ir;
 const Module = @import("Module.zig");
 const std = @import("std");
+const ErrorCollector = @import("datastructures/ErrorCollector.zig");
 
 pub const Environment = @import("Environment.zig");
 pub const Error = Environment.Error;
@@ -35,7 +36,7 @@ pub fn evalStr(self: *Vm, T: type, allocator: std.mem.Allocator, expr: []const u
     var tmp_arena = std.heap.ArenaAllocator.init(self.env.allocator());
     defer tmp_arena.deinit();
     const tmp_allocator = tmp_arena.allocator();
-    const ir = try Ir.initStrExpr(tmp_allocator, expr);
+    const ir = try Ir.initStrExpr(tmp_allocator, &self.env.errors, expr);
     var compiler = try Compiler.initModule(tmp_allocator, &self.env, try self.env.getOrCreateModule(.{}));
     const bc = try compiler.compile(ir);
     const ret_val = try self.evalFuncVal(bc, &.{});
@@ -61,14 +62,23 @@ pub fn registerGlobalFn(
     try self.env.global_module.setVal(&self.env, name, func_val);
 }
 
+fn quack(_: *Environment, _: []const Val) NativeFnError!Val {
+    std.debug.print("Quack!\n", .{});
+    return .none;
+}
+
 // Tests the example code from site/index.md.
 test "index.md example test" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    _ = try vm.evalStr(Val, std.testing.allocator, "(define args (list 1 2 3 4))");
-    const actual = try vm.evalStr([]i64, std.testing.allocator, "args");
+    errdefer std.debug.print("Fizz VM failed:\n{any}\n", .{vm.env.errors});
+
+    const actual = try vm.evalStr([]i64, std.testing.allocator, "(list 1 2 3 4)");
     defer std.testing.allocator.free(actual);
     try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
+
+    try vm.registerGlobalFn("quack!", quack);
+    try vm.evalStr(void, std.testing.allocator, "(quack!)");
 }
 
 // Tests the example code from site/zig-api.md

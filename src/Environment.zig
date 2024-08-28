@@ -1,5 +1,6 @@
 const Environment = @This();
 
+const std = @import("std");
 const Module = @import("Module.zig");
 const Ast = @import("Ast.zig");
 const Val = @import("val.zig").Val;
@@ -8,7 +9,7 @@ const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const Compiler = @import("Compiler.zig");
 const builtins = @import("builtins.zig");
-const std = @import("std");
+const ErrorCollector = @import("datastructures/ErrorCollector.zig");
 
 /// Deals with allocating and deallocating values. This involves garbage collection.
 memory_manager: MemoryManager,
@@ -25,6 +26,9 @@ global_module: Module,
 /// Map from module name to the module itself. The Key is a copy of the name within the *Module
 /// corresponding object.
 modules: std.StringHashMapUnmanaged(*Module),
+
+/// Place to store errors.
+errors: ErrorCollector,
 
 // Runtime stats for the VM.
 runtime_stats: RuntimeStats,
@@ -66,6 +70,7 @@ pub fn init(alloc: std.mem.Allocator) std.mem.Allocator.Error!Environment {
             .alias_to_module = .{},
         },
         .modules = .{},
+        .errors = ErrorCollector.init(alloc),
         .runtime_stats = .{},
     };
     try builtins.registerAll(&vm);
@@ -83,6 +88,7 @@ pub fn deinit(self: *Environment) void {
     self.modules.deinit(self.allocator());
 
     self.memory_manager.deinit();
+    self.errors.deinit();
 }
 
 /// Get the memory allocator used for all `Val`.
@@ -334,7 +340,11 @@ fn runNext(self: *Environment) Error!bool {
         .deref_local => |s| {
             const mod_and_sym = Module.parseModuleAndSymbol(s);
             if (mod_and_sym.module_alias) |alias| {
-                const m = frame.bytecode.module.alias_to_module.get(alias) orelse return Error.SymbolNotFound;
+                const m = frame.bytecode.module.alias_to_module.get(alias) orelse {
+                    const msg = try std.fmt.allocPrint(self.errors.allocator(), "Module {s} not found", .{alias});
+                    try self.errors.addErrorOwned(.{ .msg = msg });
+                    return Error.SymbolNotFound;
+                };
                 try self.executeDeref(m, mod_and_sym.symbol);
             } else {
                 try self.executeDeref(frame.bytecode.module, mod_and_sym.symbol);
@@ -359,6 +369,12 @@ fn executePushConst(self: *Environment, v: Val) !void {
 
 fn executeDeref(self: *Environment, module: *const Module, sym: []const u8) Error!void {
     const v = module.getVal(sym) orelse {
+        const msg = try std.fmt.allocPrint(
+            self.errors.allocator(),
+            "Symbol {s} not found in module {s}",
+            .{ sym, module.name },
+        );
+        try self.errors.addErrorOwned(.{ .msg = msg });
         return Error.SymbolNotFound;
     };
     try self.stack.append(self.allocator(), v);
@@ -370,7 +386,10 @@ fn executeGetArg(self: *Environment, frame: *const Frame, idx: usize) !void {
 }
 
 fn executeMove(self: *Environment, frame: *const Frame, idx: usize) !void {
-    const v = self.stack.popOrNull() orelse return error.RuntimeError;
+    const v = self.stack.popOrNull() orelse {
+        try self.errors.addError(.{ .msg = "unexpected code branch reached, file a GitHub issue" });
+        return error.RuntimeError;
+    };
     self.stack.items[frame.stack_start + idx] = v;
 }
 
@@ -383,7 +402,15 @@ fn executeEval(self: *Environment, frame: *const Frame, n: usize) !void {
     const stack_start = fn_idx + 1;
     switch (func) {
         .bytecode => |bc| {
-            if (bc.arg_count != arg_count) return error.ArrityError;
+            if (bc.arg_count != arg_count) {
+                const msg = try std.fmt.allocPrint(
+                    self.errors.allocator(),
+                    "Function {s} received {d} arguments but expected {d}",
+                    .{ bc.name, arg_count, bc.arg_count },
+                );
+                try self.errors.addErrorOwned(.{ .msg = msg });
+                return error.ArrityError;
+            }
             try self.stack.appendNTimes(self.allocator(), .none, bc.locals_count);
             const new_frame = Frame{
                 .bytecode = bc,
@@ -398,6 +425,12 @@ fn executeEval(self: *Environment, frame: *const Frame, n: usize) !void {
             self.stack.items = self.stack.items[0..stack_start];
         },
         else => {
+            const msg = try std.fmt.allocPrint(
+                self.errors.allocator(),
+                "Expected to evaluate value of type function but got {any}",
+                .{func.tag()},
+            );
+            try self.errors.addErrorOwned(.{ .msg = msg });
             return error.TypeError;
         },
     }
@@ -420,8 +453,27 @@ fn executeDefine(self: *Environment, module: *Module, symbol: []const u8) Error!
 }
 
 fn executeImportModule(self: *Environment, module: *Module, module_path: []const u8) Error!void {
-    const base_dir = module.directory() catch return Error.FileError;
-    const full_path = base_dir.realpathAlloc(self.allocator(), module_path) catch return Error.FileError;
+    errdefer {
+        self.errors.addError(ErrorCollector.Error{ .msg = "failed to import module" }) catch {};
+    }
+    const base_dir = module.directory() catch {
+        const msg = try std.fmt.allocPrint(
+            self.errors.allocator(),
+            "could not determine working directory for module {s}",
+            .{module.name},
+        );
+        try self.errors.addErrorOwned(.{ .msg = msg });
+        return Error.FileError;
+    };
+    const full_path = base_dir.realpathAlloc(self.allocator(), module_path) catch {
+        const msg = try std.fmt.allocPrint(
+            self.errors.allocator(),
+            "could not determine path for {s}",
+            .{module_path},
+        );
+        try self.errors.addErrorOwned(.{ .msg = msg });
+        return Error.FileError;
+    };
     defer self.allocator().free(full_path);
     const module_alias = Module.defaultModuleAlias(full_path);
     if (self.getModule(full_path)) |m| {
@@ -432,12 +484,20 @@ fn executeImportModule(self: *Environment, module: *Module, module_path: []const
     var arena = std.heap.ArenaAllocator.init(self.allocator());
     defer arena.deinit();
     const file_size_limit = 64 * 1024 * 1024;
-    const contents = std.fs.cwd().readFileAlloc(arena.allocator(), full_path, file_size_limit) catch return Error.FileError;
-    const ast = Ast.initWithStr(arena.allocator(), contents) catch return Error.SyntaxError;
+    const contents = std.fs.cwd().readFileAlloc(arena.allocator(), full_path, file_size_limit) catch {
+        const msg = try std.fmt.allocPrint(
+            self.errors.allocator(),
+            "could not read file {any}",
+            .{full_path},
+        );
+        try self.errors.addErrorOwned(.{ .msg = msg });
+        return Error.FileError;
+    };
+    const ast = Ast.initWithStr(arena.allocator(), &self.errors, contents) catch return Error.SyntaxError;
     var module_ok = false;
     const new_module = self.getOrCreateModule(.{ .name = full_path }) catch return Error.RuntimeError;
     errdefer if (!module_ok) self.deleteModule(new_module) catch {};
-    const ir = Ir.init(arena.allocator(), ast.asts) catch return Error.RuntimeError;
+    const ir = Ir.init(arena.allocator(), &self.errors, ast.asts) catch return Error.RuntimeError;
     var compiler = try Compiler.initModule(arena.allocator(), self, new_module);
     const module_bytecode = compiler.compile(ir) catch Error.RuntimeError;
     _ = try self.evalNoReset(try module_bytecode, &.{});

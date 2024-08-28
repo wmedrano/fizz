@@ -31,6 +31,7 @@ nav_order: 1
 	const fizz = @import("fizz");
 	var vm = try fizz.Vm.init(allocator);
 	defer vm.deinit();
+    errdefer std.debug.print("Fizz VM failed:\n{any}\n", .{vm.env.errors});
 	```
 1. Write some code within the virtual machine.
    ```zig
@@ -159,6 +160,18 @@ try vm.runGc();
 
 // Run deinit to free all memory.
 defer vm.deinit();
+```
+
+
+## Errors
+
+Fizz uses the standard Zig error mechanism, but also stores error logs under
+`vm.env.errors`. The current errors can be printed by:
+
+```zig
+fn printErrors(vm: *fizz.Vm) void {
+    std.debug.print("VM Errors: {any}\n", .{vm.env.errors});
+}
 ```
 
 
