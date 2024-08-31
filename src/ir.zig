@@ -1,5 +1,6 @@
 const std = @import("std");
 const Val = @import("val.zig").Val;
+const Symbol = Val.Symbol;
 const Ast = @import("Ast.zig");
 const MemoryManager = @import("MemoryManager.zig");
 const ErrorCollector = @import("datastructures/ErrorCollector.zig");
@@ -99,11 +100,11 @@ pub const Ir = union(enum) {
     }
 
     /// Populate define_set with all symbols that are defined.
-    pub fn populateDefinedVals(self: *const Ir, defined_vals: *std.StringHashMap(usize), memory_manager: *MemoryManager) !void {
+    pub fn populateDefinedVals(self: *const Ir, defined_vals: *std.StringHashMap(Symbol), memory_manager: *MemoryManager) !void {
         switch (self.*) {
             .define => |def| {
-                const sym_id = try memory_manager.allocateSymbol(def.name);
-                try defined_vals.put(def.name, sym_id);
+                const sym = try memory_manager.allocateSymbol(def.name);
+                try defined_vals.put(def.name, sym);
             },
             .ret => |r| for (r.exprs) |e| try e.populateDefinedVals(defined_vals, memory_manager),
             else => {},
@@ -694,7 +695,7 @@ test "definedVals visits all defined values" {
             }),
         },
     };
-    var actual = std.StringHashMap(usize).init(std.testing.allocator);
+    var actual = std.StringHashMap(Symbol).init(std.testing.allocator);
     defer actual.deinit();
     try ir.populateDefinedVals(&actual, &memory_manager);
     try std.testing.expectEqual(2, actual.count());

@@ -6,6 +6,7 @@ const Module = @import("Module.zig");
 const std = @import("std");
 const ErrorCollector = @import("datastructures/ErrorCollector.zig");
 const Ast = @import("Ast.zig");
+const Symbol = Val.Symbol;
 
 pub const Env = @import("Env.zig");
 pub const Error = Env.Error;
@@ -126,8 +127,8 @@ pub fn toZig(self: *Vm, T: type, alloc: std.mem.Allocator, val: Val) !T {
                 var fizz_field_name: [field.name.len]u8 = undefined;
                 @memcpy(&fizz_field_name, field.name);
                 makeKebabCase(&fizz_field_name);
-                if (self.env.memory_manager.symbol_to_id.get(&fizz_field_name)) |sym_id| {
-                    const field_val = map.get(sym_id) orelse
+                if (self.env.memory_manager.name_to_symbol.get(&fizz_field_name)) |sym| {
+                    const field_val = map.get(sym) orelse
                         return Error.TypeError;
                     const field_zig_val = try self.toZig(field.type, alloc, field_val);
                     errdefer toZigClean(field.type, alloc, field_zig_val, null);
@@ -374,9 +375,9 @@ fn runNext(self: *Vm) Error!bool {
             if (s.module.len > 0) {
                 const m = frame.bytecode.module.alias_to_module.get(s.module) orelse
                     return self.errModuleNotFound(s.module);
-                try self.executeDeref(m, s.sym_id);
+                try self.executeDeref(m, s.sym);
             } else {
-                try self.executeDeref(frame.bytecode.module, s.sym_id);
+                try self.executeDeref(frame.bytecode.module, s.sym);
             }
         },
         .deref_global => |s| try self.executeDeref(&self.env.global_module, s),
@@ -396,12 +397,12 @@ fn executePushConst(self: *Vm, v: Val) !void {
     try self.env.stack.append(self.valAllocator(), v);
 }
 
-fn executeDeref(self: *Vm, module: *const Module, sym_id: usize) Error!void {
-    if (module.getValBySymbolId(sym_id)) |v| {
+fn executeDeref(self: *Vm, module: *const Module, sym: Symbol) Error!void {
+    if (module.getValBySymbol(sym)) |v| {
         try self.env.stack.append(self.valAllocator(), v);
         return;
     }
-    return self.errSymbolNotFound(module, sym_id);
+    return self.errSymbolNotFound(module, sym);
 }
 
 fn executeGetArg(self: *Vm, frame: *const Env.Frame, idx: usize) !void {
@@ -473,9 +474,9 @@ fn executeRet(self: *Vm) !bool {
     return true;
 }
 
-fn executeDefine(self: *Vm, module: *Module, symbol_id: usize) Error!void {
+fn executeDefine(self: *Vm, module: *Module, symbol_id: Symbol) Error!void {
     const val = self.env.stack.pop();
-    try module.setValBySymbolId(&self.env, symbol_id, val);
+    try module.setValBySymbol(&self.env, symbol_id, val);
 }
 
 fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Error!void {
@@ -531,13 +532,13 @@ fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Erro
     try module.setModuleAlias(self.valAllocator(), module_alias, new_module);
 }
 
-fn errSymbolNotFound(self: *Vm, module: *const Module, sym_id: usize) Error {
+fn errSymbolNotFound(self: *Vm, module: *const Module, sym: Symbol) Error {
     @setCold(true);
-    const sym_name = self.env.memory_manager.id_to_symbol.get(sym_id) orelse "*unknown-symbol*";
+    const name = self.env.memory_manager.symbol_to_name.get(sym) orelse "*unknown-symbol*";
     const msg = try std.fmt.allocPrint(
         self.env.errors.allocator(),
         "Symbol {s} (id={d}) not found in module {s}",
-        .{ sym_name, sym_id, module.name },
+        .{ name, sym.id, module.name },
     );
     try self.env.errors.addErrorOwned(.{ .msg = msg });
     return Error.SymbolNotFound;
@@ -612,7 +613,7 @@ test "can't convert list of heterogenous types" {
             Val{ .list = @constCast(
                 &[_]Val{
                     Val{ .list = @constCast(&[_]Val{ .{ .string = "good" }, .{ .string = "also good" } }) },
-                    Val{ .list = @constCast(&[_]Val{ .{ .string = "still good" }, .{ .symbol = 0 } }) },
+                    Val{ .list = @constCast(&[_]Val{ .{ .string = "still good" }, .{ .symbol = .{ .id = 0 } } }) },
                 },
             ) },
         ),

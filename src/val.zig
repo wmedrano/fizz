@@ -9,13 +9,15 @@ pub const Val = union(enum) {
     int: i64,
     float: f64,
     string: []const u8,
-    symbol: usize,
+    symbol: Symbol,
     list: []Val,
-    structV: *std.AutoHashMapUnmanaged(usize, Val),
+    structV: *std.AutoHashMapUnmanaged(Symbol, Val),
     bytecode: *ByteCode,
     native_fn: NativeFn,
 
     const Tag = std.meta.Tag(Val);
+
+    pub const Symbol = struct { id: usize };
 
     pub const NativeFn = struct {
         pub const Error = error{
@@ -46,14 +48,14 @@ pub const Val = union(enum) {
                     try writer.writeAll(s);
                     try writer.writeAll("\"");
                 },
-                .symbol => |sym_id| {
+                .symbol => |sym| {
                     if (self.memory_manager) |mm| {
-                        if (mm.id_to_symbol.get(sym_id)) |s| {
+                        if (mm.symbol_to_name.get(sym)) |s| {
                             try std.fmt.format(writer, "'{s}", .{s});
                             return;
                         }
                     }
-                    try std.fmt.format(writer, "'symbol-#{d}", .{sym_id});
+                    try std.fmt.format(writer, "'symbol-#{d}", .{sym.id});
                 },
                 .list => |lst| {
                     try writer.writeAll("(");

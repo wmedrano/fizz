@@ -4,6 +4,7 @@ const Vm = @import("Vm.zig");
 const Env = @import("Env.zig");
 const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
+const Symbol = Val.Symbol;
 const iter = @import("datastructures/iter.zig");
 const std = @import("std");
 
@@ -11,7 +12,7 @@ const std = @import("std");
 name: []const u8,
 /// The values within the module. The strings and values are managed by a Vm. Only the hashmap
 /// datastructure itself is managed by Module.
-values: std.AutoHashMapUnmanaged(usize, Val) = .{},
+values: std.AutoHashMapUnmanaged(Symbol, Val) = .{},
 /// Map from alias to module that this module has access to.
 alias_to_module: std.StringHashMapUnmanaged(*Module),
 
@@ -52,25 +53,25 @@ pub fn deinitLocal(self: *Module, allocator: std.mem.Allocator) void {
 
 /// Set a value within the module.
 pub fn setVal(self: *Module, env: *Env, sym: []const u8, v: Val) !void {
-    const sym_id = try env.memory_manager.allocateSymbol(sym);
-    try self.setValBySymbolId(env, sym_id, v);
+    const new_sym = try env.memory_manager.allocateSymbol(sym);
+    try self.setValBySymbol(env, new_sym, v);
 }
 
 /// Set a value within the module by the symbol id.
-pub fn setValBySymbolId(self: *Module, env: *Env, sym_id: usize, v: Val) !void {
-    try self.values.put(env.memory_manager.allocator, sym_id, v);
+pub fn setValBySymbol(self: *Module, env: *Env, sym: Symbol, v: Val) !void {
+    try self.values.put(env.memory_manager.allocator, sym, v);
 }
 
 /// Get a value within the module.
-pub fn getVal(self: *const Module, memory_manager: *const MemoryManager, sym: []const u8) ?Val {
-    if (memory_manager.symbolId(sym)) |sym_id|
-        return self.values.get(sym_id);
+pub fn getVal(self: *const Module, memory_manager: *const MemoryManager, name: []const u8) ?Val {
+    if (memory_manager.nameToSymbol(name)) |sym|
+        return self.values.get(sym);
     return null;
 }
 
 /// Get a value within the module by its symbol id.
-pub fn getValBySymbolId(self: *const Module, sym_id: usize) ?Val {
-    return self.values.get(sym_id);
+pub fn getValBySymbol(self: *const Module, sym: Symbol) ?Val {
+    return self.values.get(sym);
 }
 
 /// Set a module alias.
@@ -110,7 +111,7 @@ pub fn defaultModuleAlias(path: []const u8) []const u8 {
     return path[start..];
 }
 
-pub const AliasAndSymbol = struct { module_alias: ?[]const u8, sym_id: usize };
+pub const AliasAndSymbol = struct { module_alias: ?[]const u8, sym: Symbol };
 
 /// Parse the module and symbol.
 pub fn parseModuleAndSymbol(ident: []const u8, memory_manager: *MemoryManager) !AliasAndSymbol {
@@ -119,19 +120,19 @@ pub fn parseModuleAndSymbol(ident: []const u8, memory_manager: *MemoryManager) !
         separator_idx += 1;
     }
     if (separator_idx == ident.len or separator_idx == 0 or separator_idx + 1 == ident.len) {
-        const sym_id = try memory_manager.allocateSymbol(ident);
-        return .{ .module_alias = null, .sym_id = sym_id };
+        const sym = try memory_manager.allocateSymbol(ident);
+        return .{ .module_alias = null, .sym = sym };
     }
     return .{
         .module_alias = ident[0..separator_idx],
-        .sym_id = try memory_manager.allocateSymbol(ident[separator_idx + 1 ..]),
+        .sym = try memory_manager.allocateSymbol(ident[separator_idx + 1 ..]),
     };
 }
 
 /// An iterator over values referenced within the module.
 pub const ValIterator = struct {
     /// The underlying iterator over values.
-    iterator: std.AutoHashMapUnmanaged(usize, Val).ValueIterator,
+    iterator: std.AutoHashMapUnmanaged(Symbol, Val).ValueIterator,
 
     /// Get the next referenced value.
     pub fn next(self: *ValIterator) ?Val {
@@ -189,23 +190,23 @@ test "parse module and symbol" {
     defer vm.deinit();
     var mm = &vm.env.memory_manager;
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = null, .sym_id = try mm.allocateSymbol("/") },
+        AliasAndSymbol{ .module_alias = null, .sym = try mm.allocateSymbol("/") },
         parseModuleAndSymbol("/", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = null, .sym_id = try mm.allocateSymbol("module/") },
+        AliasAndSymbol{ .module_alias = null, .sym = try mm.allocateSymbol("module/") },
         parseModuleAndSymbol("module/", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = null, .sym_id = try mm.allocateSymbol("/symbol") },
+        AliasAndSymbol{ .module_alias = null, .sym = try mm.allocateSymbol("/symbol") },
         parseModuleAndSymbol("/symbol", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = "module", .sym_id = try mm.allocateSymbol("symbol") },
+        AliasAndSymbol{ .module_alias = "module", .sym = try mm.allocateSymbol("symbol") },
         parseModuleAndSymbol("module/symbol", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = "module", .sym_id = try mm.allocateSymbol("symbol/subsymbol") },
+        AliasAndSymbol{ .module_alias = "module", .sym = try mm.allocateSymbol("symbol/subsymbol") },
         parseModuleAndSymbol("module/symbol/subsymbol", mm),
     );
 }

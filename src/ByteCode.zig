@@ -1,4 +1,5 @@
 const ByteCode = @This();
+const Symbol = Val.Symbol;
 const Val = @import("val.zig").Val;
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
@@ -80,13 +81,13 @@ pub const Instruction = union(enum) {
     /// Push a constant onto the stack.
     push_const: Val,
     /// Dereference the symbol from the current module.
-    deref_local: struct { module: []const u8, sym_id: usize },
-    /// Dereference the symbol id from the global module.
-    deref_global: usize,
+    deref_local: struct { module: []const u8, sym: Symbol },
+    /// Dereference the symbol from the global module.
+    deref_global: Symbol,
     /// Get the nth value (0-based index) from the base of the current function call stack.
     get_arg: usize,
     /// Define a symbol on the current module.
-    define: usize,
+    define: Symbol,
     /// Move the top value of the stack into the given index.
     move: usize,
     /// Evaluate the top n elements of the stack. The deepmost value should be a function.
@@ -121,8 +122,8 @@ pub const Instruction = union(enum) {
     ) !void {
         switch (self.*) {
             .push_const => |v| try writer.print("push_const({any})", .{v}),
-            .deref_global => |sym| try writer.print("deref_global({d})", .{sym}),
-            .deref_local => |sym| try writer.print("deref_local({s}, {d})", .{ sym.module, sym.sym_id }),
+            .deref_global => |sym| try writer.print("deref_global({d})", .{sym.id}),
+            .deref_local => |sym| try writer.print("deref_local({s}, {d})", .{ sym.module, sym.sym.id }),
             .get_arg => |n| try writer.print("get_arg({d})", .{n}),
             .move => |n| try writer.print("move({d})", .{n}),
             .eval => |n| try writer.print("eval({d})", .{n}),
@@ -130,7 +131,7 @@ pub const Instruction = union(enum) {
             .jump_if => |n| try writer.print("jump_if({d})", .{n}),
             .import_module => |m| try writer.print("import({s})", .{m}),
             .ret => try writer.print("ret()", .{}),
-            .define => |sym| try writer.print("define({d})", .{sym}),
+            .define => |sym| try writer.print("define({d})", .{sym.id}),
         }
     }
 };

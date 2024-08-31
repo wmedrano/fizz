@@ -44,7 +44,7 @@ fn equalImpl(a: Val, b: Val) Error!bool {
         .int => |x| return x == b.int,
         .float => |x| return x == b.float,
         .string => |x| return std.mem.eql(u8, x, b.string),
-        .symbol => |x| return x == b.symbol,
+        .symbol => |x| return x.id == b.symbol.id,
         .list => |x| {
             if (x.len != b.list.len) return true;
             for (x, b.list) |a_item, b_item| {
@@ -201,15 +201,15 @@ fn structSet(vm: *Vm, vals: []const Val) Error!Val {
         .structV => |m| m,
         else => return Error.TypeError,
     };
-    const sym_id = switch (vals[1]) {
+    const sym = switch (vals[1]) {
         .symbol => |s| s,
         else => return Error.TypeError,
     };
-    if (struct_map.getEntry(sym_id)) |entry| {
+    if (struct_map.getEntry(sym)) |entry| {
         entry.value_ptr.* = vals[2];
         return .none;
     }
-    struct_map.put(vm.valAllocator(), sym_id, vals[2]) catch return Error.RuntimeError;
+    struct_map.put(vm.valAllocator(), sym, vals[2]) catch return Error.RuntimeError;
     return .none;
 }
 
@@ -219,11 +219,11 @@ fn structGet(_: *Vm, vals: []const Val) Error!Val {
         .structV => |m| m,
         else => return Error.TypeError,
     };
-    const sym_id = switch (vals[1]) {
+    const sym = switch (vals[1]) {
         .symbol => |s| s,
         else => return Error.TypeError,
     };
-    const v = struct_map.get(sym_id) orelse return Error.RuntimeError;
+    const v = struct_map.get(sym) orelse return Error.RuntimeError;
     return v;
 }
 

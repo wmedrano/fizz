@@ -2,6 +2,7 @@ const ByteCode = @import("ByteCode.zig");
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
+const Symbol = Val.Symbol;
 const Compiler = @This();
 const Env = @import("Env.zig");
 const Vm = @import("Vm.zig");
@@ -26,15 +27,15 @@ module: *Module,
 is_module: bool = false,
 
 /// The values that are defined in `module`.
-module_defined_vals: std.StringHashMap(usize),
+module_defined_vals: std.StringHashMap(Symbol),
 
 /// Initialize a compiler for a function that lives inside `module`.
 pub fn initFunction(allocator: std.mem.Allocator, env: *Env, module: *Module, args: []const []const u8) !Compiler {
-    var module_defined_vals = std.StringHashMap(usize).init(allocator);
+    var module_defined_vals = std.StringHashMap(Symbol).init(allocator);
     var module_definitions = module.values.keyIterator();
-    while (module_definitions.next()) |sym_id| {
-        if (env.memory_manager.id_to_symbol.get(sym_id.*)) |sym_name|
-            try module_defined_vals.put(sym_name, sym_id.*);
+    while (module_definitions.next()) |sym| {
+        if (env.memory_manager.symbol_to_name.get(sym.*)) |sym_name|
+            try module_defined_vals.put(sym_name, sym.*);
     }
     const scopes = try ScopeManager.initWithArgs(allocator, args);
     return .{
@@ -48,11 +49,11 @@ pub fn initFunction(allocator: std.mem.Allocator, env: *Env, module: *Module, ar
 
 /// Initialize a compiler for a module definition.
 pub fn initModule(allocator: std.mem.Allocator, env: *Env, module: *Module) !Compiler {
-    var module_defined_vals = std.StringHashMap(usize).init(allocator);
+    var module_defined_vals = std.StringHashMap(Symbol).init(allocator);
     var module_definitions = module.values.keyIterator();
-    while (module_definitions.next()) |sym_id| {
-        if (env.memory_manager.id_to_symbol.get(sym_id.*)) |sym_name|
-            try module_defined_vals.put(sym_name, sym_id.*);
+    while (module_definitions.next()) |sym| {
+        if (env.memory_manager.symbol_to_name.get(sym.*)) |sym_name|
+            try module_defined_vals.put(sym_name, sym.*);
     }
     return .{
         .env = env,
@@ -132,11 +133,11 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
         .define => |def| {
             if (self.computeStackAction(def.expr) != .push) return Error.BadSyntax;
             if (is_module) {
-                const sym_id = try self.env.memory_manager.allocateSymbol(def.name);
+                const sym = try self.env.memory_manager.allocateSymbol(def.name);
                 try self.addIr(bc, def.expr);
                 try bc.instructions.append(
                     self.env.memory_manager.allocator,
-                    .{ .define = sym_id },
+                    .{ .define = sym },
                 );
             } else {
                 const local_idx = try self.scopes.addVariable(def.name);
@@ -165,12 +166,12 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
                     const module = try self.env.memory_manager.allocator.dupe(u8, parsed_sym.module_alias orelse "");
                     const local = .{
                         .module = module,
-                        .sym_id = parsed_sym.sym_id,
+                        .sym = parsed_sym.sym,
                     };
                     try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_local = local });
                 } else {
-                    const sym_id = try self.env.memory_manager.allocateSymbol(s);
-                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_global = sym_id });
+                    const sym = try self.env.memory_manager.allocateSymbol(s);
+                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_global = sym });
                 }
             }
         },
