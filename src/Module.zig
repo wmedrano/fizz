@@ -1,5 +1,6 @@
 const Module = @This();
 
+const Vm = @import("Vm.zig");
 const Env = @import("Env.zig");
 const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
@@ -68,7 +69,7 @@ pub fn getVal(self: *const Module, memory_manager: *const MemoryManager, sym: []
 }
 
 /// Get a value within the module by its symbol id.
-pub fn getValBySybolId(self: *const Module, sym_id: usize) ?Val {
+pub fn getValBySymbolId(self: *const Module, sym_id: usize) ?Val {
     return self.values.get(sym_id);
 }
 
@@ -109,20 +110,21 @@ pub fn defaultModuleAlias(path: []const u8) []const u8 {
     return path[start..];
 }
 
-pub const AliasAndSymbol = struct { module_alias: ?[]const u8, symbol: []const u8 };
+pub const AliasAndSymbol = struct { module_alias: ?[]const u8, sym_id: usize };
 
 /// Parse the module and symbol.
-pub fn parseModuleAndSymbol(ident: []const u8) AliasAndSymbol {
+pub fn parseModuleAndSymbol(ident: []const u8, memory_manager: *const MemoryManager) AliasAndSymbol {
     var separator_idx: usize = 0;
     while (separator_idx < ident.len and ident[separator_idx] != '/') {
         separator_idx += 1;
     }
     if (separator_idx == ident.len or separator_idx == 0 or separator_idx + 1 == ident.len) {
-        return .{ .module_alias = null, .symbol = ident };
+        const sym_id = memory_manager.symbol_to_id.get(ident) orelse std.math.maxInt(usize);
+        return .{ .module_alias = null, .sym_id = sym_id };
     }
     return .{
         .module_alias = ident[0..separator_idx],
-        .symbol = ident[separator_idx + 1 ..],
+        .sym_id = memory_manager.symbol_to_id.get(ident[separator_idx + 1 ..]) orelse std.math.maxInt(usize),
     };
 }
 
@@ -183,24 +185,27 @@ test "default module alias" {
 }
 
 test "parse module and symbol" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var mm = &vm.env.memory_manager;
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = null, .symbol = "/" },
-        parseModuleAndSymbol("/"),
+        AliasAndSymbol{ .module_alias = null, .sym_id = try mm.allocateSymbol("/") },
+        parseModuleAndSymbol("/", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = null, .symbol = "module/" },
-        parseModuleAndSymbol("module/"),
+        AliasAndSymbol{ .module_alias = null, .sym_id = try mm.allocateSymbol("module/") },
+        parseModuleAndSymbol("module/", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = null, .symbol = "/symbol" },
-        parseModuleAndSymbol("/symbol"),
+        AliasAndSymbol{ .module_alias = null, .sym_id = try mm.allocateSymbol("/symbol") },
+        parseModuleAndSymbol("/symbol", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = "module", .symbol = "symbol" },
-        parseModuleAndSymbol("module/symbol"),
+        AliasAndSymbol{ .module_alias = "module", .sym_id = try mm.allocateSymbol("symbol") },
+        parseModuleAndSymbol("module/symbol", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = "module", .symbol = "symbol/subsymbol" },
-        parseModuleAndSymbol("module/symbol/subsymbol"),
+        AliasAndSymbol{ .module_alias = "module", .sym_id = try mm.allocateSymbol("symbol/subsymbol") },
+        parseModuleAndSymbol("module/symbol/subsymbol", mm),
     );
 }

@@ -371,16 +371,16 @@ fn runNext(self: *Vm) Error!bool {
             if (!should_continue) return false;
         },
         .deref_local => |s| {
-            const mod_and_sym = Module.parseModuleAndSymbol(s);
+            const mod_and_sym = Module.parseModuleAndSymbol(s, &self.env.memory_manager);
             if (mod_and_sym.module_alias) |alias| {
                 const m = frame.bytecode.module.alias_to_module.get(alias) orelse {
                     const msg = try std.fmt.allocPrint(self.env.errors.allocator(), "Module {s} not found", .{alias});
                     try self.env.errors.addErrorOwned(.{ .msg = msg });
                     return Error.SymbolNotFound;
                 };
-                try self.executeDeref(m, mod_and_sym.symbol);
+                try self.executeDeref(m, mod_and_sym.sym_id);
             } else {
-                try self.executeDeref(frame.bytecode.module, mod_and_sym.symbol);
+                try self.executeDeref(frame.bytecode.module, mod_and_sym.sym_id);
             }
         },
         .deref_global => |s| try self.executeDeref(&self.env.global_module, s),
@@ -400,12 +400,13 @@ fn executePushConst(self: *Vm, v: Val) !void {
     try self.env.stack.append(self.valAllocator(), v);
 }
 
-fn executeDeref(self: *Vm, module: *const Module, sym: []const u8) Error!void {
-    const v = module.getVal(&self.env.memory_manager, sym) orelse {
+fn executeDeref(self: *Vm, module: *const Module, sym_id: usize) Error!void {
+    const v = module.getValBySymbolId(sym_id) orelse {
+        const sym_name = self.env.memory_manager.id_to_symbol.get(sym_id) orelse "*unknown-symbol*";
         const msg = try std.fmt.allocPrint(
             self.env.errors.allocator(),
-            "Symbol {s} not found in module {s}",
-            .{ sym, module.name },
+            "Symbol {s} (id={d}) not found in module {s}",
+            .{ sym_name, sym_id, module.name },
         );
         try self.env.errors.addErrorOwned(.{ .msg = msg });
         return Error.SymbolNotFound;

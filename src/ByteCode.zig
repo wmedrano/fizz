@@ -18,7 +18,6 @@ pub fn deinit(self: *ByteCode, allocator: std.mem.Allocator) void {
     for (self.instructions.items) |i| {
         switch (i) {
             .deref_local => |sym| allocator.free(sym),
-            .deref_global => |sym| allocator.free(sym),
             .import_module => |path| allocator.free(path),
             else => {},
         }
@@ -82,8 +81,8 @@ pub const Instruction = union(enum) {
     push_const: Val,
     /// Dereference the symbol from the current module.
     deref_local: []const u8,
-    /// Dereference the symbol from the global module.
-    deref_global: []const u8,
+    /// Dereference the symbol id from the global module.
+    deref_global: usize,
     /// Get the nth value (0-based index) from the base of the current function call stack.
     get_arg: usize,
     /// Define a symbol on the current module.
@@ -122,7 +121,7 @@ pub const Instruction = union(enum) {
     ) !void {
         switch (self.*) {
             .push_const => |v| try writer.print("push_const({any})", .{v}),
-            .deref_global => |sym| try writer.print("deref_global({s})", .{sym}),
+            .deref_global => |sym| try writer.print("deref_global({d})", .{sym}),
             .deref_local => |sym| try writer.print("deref_local({s})", .{sym}),
             .get_arg => |n| try writer.print("get_arg({d})", .{n}),
             .move => |n| try writer.print("move({d})", .{n}),
