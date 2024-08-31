@@ -371,16 +371,15 @@ fn runNext(self: *Vm) Error!bool {
             if (!should_continue) return false;
         },
         .deref_local => |s| {
-            const mod_and_sym = Module.parseModuleAndSymbol(s, &self.env.memory_manager);
-            if (mod_and_sym.module_alias) |alias| {
-                const m = frame.bytecode.module.alias_to_module.get(alias) orelse {
-                    const msg = try std.fmt.allocPrint(self.env.errors.allocator(), "Module {s} not found", .{alias});
+            if (s.module.len > 0) {
+                const m = frame.bytecode.module.alias_to_module.get(s.module) orelse {
+                    const msg = try std.fmt.allocPrint(self.env.errors.allocator(), "Module {s} not found", .{s.module});
                     try self.env.errors.addErrorOwned(.{ .msg = msg });
                     return Error.SymbolNotFound;
                 };
-                try self.executeDeref(m, mod_and_sym.sym_id);
+                try self.executeDeref(m, s.sym_id);
             } else {
-                try self.executeDeref(frame.bytecode.module, mod_and_sym.sym_id);
+                try self.executeDeref(frame.bytecode.module, s.sym_id);
             }
         },
         .deref_global => |s| try self.executeDeref(&self.env.global_module, s),
@@ -801,6 +800,7 @@ test "symbols from imported modules can be referenced" {
 test "module imports are relative" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
+    errdefer std.debug.print("{any}\n", .{vm.env.errors});
     try std.testing.expectEqualDeep({}, try vm.evalStr(void, std.testing.allocator, "(import \"test_scripts/import.fizz\")"));
     try std.testing.expectEqualDeep(
         6.28,

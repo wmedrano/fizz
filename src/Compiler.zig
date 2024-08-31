@@ -160,13 +160,16 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             if (self.scopes.variableIdx(s)) |var_idx| {
                 try bc.instructions.append(self.env.memory_manager.allocator, .{ .get_arg = var_idx });
             } else {
-                const sym = try self.env.memory_manager.allocator.dupe(u8, s);
-                const parsed_sym = Module.parseModuleAndSymbol(sym, &self.env.memory_manager);
+                const parsed_sym = try Module.parseModuleAndSymbol(s, &self.env.memory_manager);
                 if (self.module_defined_vals.contains(s) or parsed_sym.module_alias != null) {
-                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_local = sym });
+                    const module = try self.env.memory_manager.allocator.dupe(u8, parsed_sym.module_alias orelse "");
+                    const local = .{
+                        .module = module,
+                        .sym_id = parsed_sym.sym_id,
+                    };
+                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_local = local });
                 } else {
-                    const sym_id = try self.env.memory_manager.allocateSymbol(sym);
-                    self.env.memory_manager.allocator.free(sym);
+                    const sym_id = try self.env.memory_manager.allocateSymbol(s);
                     try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_global = sym_id });
                 }
             }

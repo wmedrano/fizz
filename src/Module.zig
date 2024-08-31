@@ -113,18 +113,18 @@ pub fn defaultModuleAlias(path: []const u8) []const u8 {
 pub const AliasAndSymbol = struct { module_alias: ?[]const u8, sym_id: usize };
 
 /// Parse the module and symbol.
-pub fn parseModuleAndSymbol(ident: []const u8, memory_manager: *const MemoryManager) AliasAndSymbol {
+pub fn parseModuleAndSymbol(ident: []const u8, memory_manager: *MemoryManager) !AliasAndSymbol {
     var separator_idx: usize = 0;
     while (separator_idx < ident.len and ident[separator_idx] != '/') {
         separator_idx += 1;
     }
     if (separator_idx == ident.len or separator_idx == 0 or separator_idx + 1 == ident.len) {
-        const sym_id = memory_manager.symbol_to_id.get(ident) orelse std.math.maxInt(usize);
+        const sym_id = try memory_manager.allocateSymbol(ident);
         return .{ .module_alias = null, .sym_id = sym_id };
     }
     return .{
         .module_alias = ident[0..separator_idx],
-        .sym_id = memory_manager.symbol_to_id.get(ident[separator_idx + 1 ..]) orelse std.math.maxInt(usize),
+        .sym_id = try memory_manager.allocateSymbol(ident[separator_idx + 1 ..]),
     };
 }
 
