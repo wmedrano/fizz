@@ -12,7 +12,7 @@ Zig**.
 
 {: .warning}
 > Fizz is not yet in a stable state. If you have a use case that you would like
-> handled, file an issue [![🪲](Bug)](https://github.com/wmedrano/fizz/issues).
+> handled, file an [🪲 issue](https://github.com/wmedrano/fizz/issues).
 
 **Links**
 
@@ -23,7 +23,7 @@ Zig**.
 
 1. Download Fizz and place it in `build.zig.zon`.
    ```sh
-   zig fetch --save https://github.com/wmedrano/fiz/archive/refs/tags/v0.1.1.tar.gz
+   zig fetch --save https://github.com/wmedrano/fiz/archive/refs/tags/v0.2.0.tar.gz
    ```
 1. Add Fizz as a dependency in `build.zig`.
    ```zig
@@ -36,10 +36,10 @@ Zig**.
    ```zig
    const fizz = @import("fizz");
 
-	   ...
-	   var vm = try fizz.Vm.init(allocator);
-	   defer vm.deinit();
-	   errdefer std.debug.print("Fizz VM failed:\n{any}\n", .{vm.env.errors});
+   ...
+   var vm = try fizz.Vm.init(allocator);
+   defer vm.deinit();
+   errdefer std.debug.print("Fizz VM failed:\n{any}\n", .{vm.env.errors});
    ```
 1. Evaluate expressions in the VM.
    ```zig
@@ -50,13 +50,13 @@ Zig**.
 1. Call custom Zig functions.
    ```zig
    fn quack(vm: *fizz.Vm, _: []const fizz.Val) fizz.NativeFnError!fizz.Val {
-	   return vm.env.memory_manager.allocateStringVal("quack!") catch return fizz.NativnFnError.RuntimeError;
+       return vm.env.memory_manager.allocateStringVal("quack!") catch return fizz.NativnFnError.RuntimeError;
    }
 
-       ...
-       try vm.registerGlobalFn("quack!", quack);
-       const text = try vm.evalStr([]u8, allocator, "(quack!)");
-       defer allocator.free(text);
+   ...
+   try vm.registerGlobalFn("quack!", quack);
+   const text = try vm.evalStr([]u8, allocator, "(quack!)");
+   defer allocator.free(text);
    ```
 
 ## Goals
