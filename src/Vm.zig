@@ -372,11 +372,8 @@ fn runNext(self: *Vm) Error!bool {
         },
         .deref_local => |s| {
             if (s.module.len > 0) {
-                const m = frame.bytecode.module.alias_to_module.get(s.module) orelse {
-                    const msg = try std.fmt.allocPrint(self.env.errors.allocator(), "Module {s} not found", .{s.module});
-                    try self.env.errors.addErrorOwned(.{ .msg = msg });
-                    return Error.SymbolNotFound;
-                };
+                const m = frame.bytecode.module.alias_to_module.get(s.module) orelse
+                    return self.errModuleNotFound(s.module);
                 try self.executeDeref(m, s.sym_id);
             } else {
                 try self.executeDeref(frame.bytecode.module, s.sym_id);
@@ -400,17 +397,11 @@ fn executePushConst(self: *Vm, v: Val) !void {
 }
 
 fn executeDeref(self: *Vm, module: *const Module, sym_id: usize) Error!void {
-    const v = module.getValBySymbolId(sym_id) orelse {
-        const sym_name = self.env.memory_manager.id_to_symbol.get(sym_id) orelse "*unknown-symbol*";
-        const msg = try std.fmt.allocPrint(
-            self.env.errors.allocator(),
-            "Symbol {s} (id={d}) not found in module {s}",
-            .{ sym_name, sym_id, module.name },
-        );
-        try self.env.errors.addErrorOwned(.{ .msg = msg });
-        return Error.SymbolNotFound;
-    };
-    try self.env.stack.append(self.valAllocator(), v);
+    if (module.getValBySymbolId(sym_id)) |v| {
+        try self.env.stack.append(self.valAllocator(), v);
+        return;
+    }
+    return self.errSymbolNotFound(module, sym_id);
 }
 
 fn executeGetArg(self: *Vm, frame: *const Env.Frame, idx: usize) !void {
@@ -538,6 +529,25 @@ fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Erro
     _ = try self.evalNoReset(try module_bytecode, &.{});
     module_ok = true;
     try module.setModuleAlias(self.valAllocator(), module_alias, new_module);
+}
+
+fn errSymbolNotFound(self: *Vm, module: *const Module, sym_id: usize) Error {
+    @setCold(true);
+    const sym_name = self.env.memory_manager.id_to_symbol.get(sym_id) orelse "*unknown-symbol*";
+    const msg = try std.fmt.allocPrint(
+        self.env.errors.allocator(),
+        "Symbol {s} (id={d}) not found in module {s}",
+        .{ sym_name, sym_id, module.name },
+    );
+    try self.env.errors.addErrorOwned(.{ .msg = msg });
+    return Error.SymbolNotFound;
+}
+
+fn errModuleNotFound(self: *Vm, module_name: []const u8) Error {
+    @setCold(true);
+    const msg = try std.fmt.allocPrint(self.env.errors.allocator(), "Module {s} not found", .{module_name});
+    try self.env.errors.addErrorOwned(.{ .msg = msg });
+    return Error.SymbolNotFound;
 }
 
 test "can convert to zig val" {
