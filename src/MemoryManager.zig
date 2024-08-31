@@ -88,7 +88,7 @@ pub fn allocateSymbolVal(self: *MemoryManager, sym: []const u8) !Val {
 }
 
 /// Allocate a new list of size `len`. All elements within the slice are uninitialized.
-pub fn allocateUninitializedList(self: *MemoryManager, len: usize) ![]Val {
+pub fn allocateListOfNone(self: *MemoryManager, len: usize) ![]Val {
     if (len == 0) {
         return &[0]Val{};
     }
@@ -98,6 +98,7 @@ pub fn allocateUninitializedList(self: *MemoryManager, len: usize) ![]Val {
         lst.ptr,
         .{ .len = len, .color = self.reachable_color.swap() },
     );
+    for (0..len) |idx| lst[idx] = .none;
     return lst;
 }
 
@@ -106,7 +107,7 @@ pub fn allocateList(self: *MemoryManager, contents: []const Val) ![]Val {
     if (contents.len == 0) {
         return &[0]Val{};
     }
-    var lst = try self.allocateUninitializedList(contents.len);
+    var lst = try self.allocateListOfNone(contents.len);
     for (0..contents.len) |idx| lst[idx] = contents[idx];
     return lst;
 }

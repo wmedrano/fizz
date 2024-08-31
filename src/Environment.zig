@@ -30,7 +30,10 @@ modules: std.StringHashMapUnmanaged(*Module),
 /// Place to store errors.
 errors: ErrorCollector,
 
-// Runtime stats for the VM.
+/// Strategy to use for GC.
+gc_strategy: GcStrategy = .per_256_calls,
+
+/// Runtime stats for the VM.
 runtime_stats: RuntimeStats,
 
 pub const Error = std.mem.Allocator.Error || Val.NativeFn.Error || error{ SymbolNotFound, FileError, SyntaxError };
@@ -45,6 +48,15 @@ const Frame = struct {
     instruction: [*]ByteCode.Instruction,
     stack_start: usize,
     ffi_boundary: bool,
+};
+
+/// Strategy to use for garbage collection.
+pub const GcStrategy = enum {
+    /// The garbage collector is never called automatically. It must be called manually with
+    /// `runGc`.
+    manual,
+    /// The garbage collector is invoked every 256 function calls.
+    per_256_calls,
 };
 
 /// The name of the global module.
@@ -294,6 +306,8 @@ pub fn deleteModule(self: *Environment, module: *Module) !void {
 /// lifetime if needed.
 pub fn evalNoReset(self: *Environment, func: Val, args: []const Val) Error!Val {
     self.runtime_stats.function_calls += 1;
+    if (self.gc_strategy == .per_256_calls and self.runtime_stats.function_calls % 256 == 0)
+        self.runGc() catch return Error.RuntimeError;
     const stack_start = self.stack.items.len;
     // TODO: The following is fragile as it duplicates a lot of executeEval.
     switch (func) {
@@ -395,6 +409,8 @@ fn executeMove(self: *Environment, frame: *const Frame, idx: usize) !void {
 
 fn executeEval(self: *Environment, frame: *const Frame, n: usize) !void {
     self.runtime_stats.function_calls += 1;
+    if (self.gc_strategy == .per_256_calls and self.runtime_stats.function_calls % 256 == 0)
+        self.runGc() catch return Error.RuntimeError;
     const norm_n: usize = if (n == 0) self.stack.items.len - frame.stack_start else n;
     const arg_count = norm_n - 1;
     const fn_idx = self.stack.items.len - norm_n;

@@ -62,13 +62,13 @@ pub fn registerGlobalFn(
     try self.env.global_module.setVal(&self.env, name, func_val);
 }
 
-fn quack(_: *Environment, _: []const Val) NativeFnError!Val {
-    std.debug.print("Quack!\n", .{});
-    return .none;
-}
-
 // Tests the example code from site/index.md.
 test "index.md example test" {
+    const quack = fn (_: *Environment, _: []const Val) NativeFnError!Val{
+        // std.debug.print("Quack!\n", .{});
+        // return .none;
+    };
+
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
     errdefer std.debug.print("Fizz VM failed:\n{any}\n", .{vm.env.errors});
@@ -76,9 +76,8 @@ test "index.md example test" {
     const actual = try vm.evalStr([]i64, std.testing.allocator, "(list 1 2 3 4)");
     defer std.testing.allocator.free(actual);
     try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
-
     try vm.registerGlobalFn("quack!", quack);
-    try vm.evalStr(void, std.testing.allocator, "(quack!)");
+    try vm.evalStr(i64, std.testing.allocator, "(quack!)");
 }
 
 // Tests the example code from site/zig-api.md

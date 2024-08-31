@@ -73,7 +73,7 @@ fn equal(_: *Environment, vals: []const Val) Error!Val {
 fn modules(env: *Environment, vals: []const Val) Error!Val {
     if (vals.len != 0) return Error.ArrityError;
     const module_count = 1 + env.modules.count();
-    var ret = env.memory_manager.allocateUninitializedList(module_count) catch return Error.RuntimeError;
+    var ret = env.memory_manager.allocateListOfNone(module_count) catch return Error.RuntimeError;
     ret[0] = env.memory_manager.allocateStringVal(env.global_module.name) catch return Error.RuntimeError;
 
     var modules_iter = env.modules.keyIterator();
@@ -315,7 +315,7 @@ fn map(env: *Environment, vals: []const Val) Error!Val {
         .list => |lst| lst,
         else => return Error.TypeError,
     };
-    const ret = env.memory_manager.allocateUninitializedList(input_list.len) catch return Error.RuntimeError;
+    const ret = env.memory_manager.allocateListOfNone(input_list.len) catch return Error.RuntimeError;
     for (input_list, 0..input_list.len) |input, idx| {
         ret[idx] = env.evalNoReset(func, &[1]Val{input}) catch return Error.RuntimeError;
     }
