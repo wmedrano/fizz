@@ -22,11 +22,16 @@ following tradeoffs may happen:
 
 ### 0.2.0 (In Progress)
 
-Will focus on:
+**Zig API**
 
-- Improved error reporting.
-- Incorporating user feedback.
-- Performance & API tweaks.
+- `Vm.evalStr` returns a Zig type by default.
+- `Vm.env.errors` collects errors that may be printed.
+- Most functions that take `*Environment` now take a `*Vm`.
+- `Environment` has been renamed to `Env`.
+- Garbage collection happens automatically. May be set to manual.
+- `Vm.keepAlive` and `Vm.allowDeath` allow extending life of a `Val`.
+
+**Fizz Language**
 
 - Allow define within subexpressions.
 

@@ -1,8 +1,5 @@
 const std = @import("std");
-const Ast = @import("Ast.zig");
-const Vm = @import("Vm.zig");
-const Ir = @import("ir.zig").Ir;
-const Compiler = @import("Compiler.zig");
+const fizz = @import("fizz");
 
 test "golden test" {
     const input = @embedFile("golden_test.fizz");
@@ -13,10 +10,11 @@ test "golden test" {
 
     var base_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = base_allocator.allocator();
-    var vm = try Vm.init(allocator);
+    var vm = try fizz.Vm.init(allocator);
     defer vm.deinit();
+    errdefer std.debug.print("Fizz VM failed:\n{any}\n", .{vm.env.errors});
 
-    var ast = try Ast.initWithStr(std.testing.allocator, input);
+    var ast = try fizz.Ast.initWithStr(std.testing.allocator, &vm.env.errors, input);
     defer ast.deinit();
     var expr_number: usize = 1;
     for (ast.asts) |node| {
@@ -70,22 +68,22 @@ test "golden test" {
         \\
     ;
     try std.testing.expectEqualStrings(expected, actual);
+    try std.testing.expect(vm.env.runtime_stats.gc_duration_nanos > 0);
 }
 
-fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *Vm, expr_number: *usize, ast: *const Ast.Node) !void {
-    var compiler = try Compiler.initModule(
+fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *fizz.Vm, expr_number: *usize, ast: *const fizz.Ast.Node) !void {
+    var compiler = try fizz.Compiler.initModule(
         allocator,
         &vm.env,
-        try vm.env.getOrCreateModule(.{}),
+        try vm.getOrCreateModule(.{}),
     );
     defer compiler.deinit();
-    const ir = try Ir.init(allocator, &[1]Ast.Node{ast.*});
+    const ir = try fizz.Ir.init(allocator, &vm.env.errors, &[1]fizz.Ast.Node{ast.*});
     defer ir.deinit(allocator);
     const bytecode = try compiler.compile(ir);
-    const res = try vm.eval(bytecode, &.{});
+    const res = try vm.evalFuncVal(bytecode, &.{});
     if (res.tag() != .none) {
         try writer.print("${d}: {any}\n", .{ expr_number.*, res });
         expr_number.* += 1;
     }
-    try vm.env.runGc();
 }

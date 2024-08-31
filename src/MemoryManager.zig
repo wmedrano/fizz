@@ -9,15 +9,21 @@ const std = @import("std");
 allocator: std.mem.Allocator,
 /// The color to tag all data that is reachable as opposed to unreachable. Unreachable data is
 /// cleaned up for garbage collection.
-reachable_color: Color,
+reachable_color: Color = Color.red,
+
 /// A map from an owned string to its reachable color.
-strings: std.StringHashMapUnmanaged(Color),
+strings: std.StringHashMapUnmanaged(Color) = .{},
 /// A map from a struct pointer to its Color.
-structs: std.AutoHashMapUnmanaged(*std.StringHashMapUnmanaged(Val), Color),
+structs: std.AutoHashMapUnmanaged(*std.StringHashMapUnmanaged(Val), Color) = .{},
 /// A map from an owned list pointer to its length and color.
-lists: std.AutoHashMapUnmanaged([*]Val, LenAndColor),
+lists: std.AutoHashMapUnmanaged([*]Val, LenAndColor) = .{},
 /// A map from a bytecode pointer to its color.
-bytecode: std.AutoHashMapUnmanaged(*ByteCode, Color),
+bytecode: std.AutoHashMapUnmanaged(*ByteCode, Color) = .{},
+
+keep_alive_strings: std.StringHashMapUnmanaged(usize) = .{},
+keep_alive_structs: std.AutoHashMapUnmanaged(*std.StringHashMapUnmanaged(Val), usize) = .{},
+keep_alive_lists: std.AutoHashMapUnmanaged([*]Val, usize) = .{},
+keep_alive_bytecode: std.AutoHashMapUnmanaged(*ByteCode, usize) = .{},
 
 /// Stores a length and a color.
 const LenAndColor = struct {
@@ -43,11 +49,6 @@ const Color = enum {
 pub fn init(allocator: std.mem.Allocator) MemoryManager {
     return .{
         .allocator = allocator,
-        .reachable_color = Color.red,
-        .strings = .{},
-        .structs = .{},
-        .lists = .{},
-        .bytecode = .{},
     };
 }
 
@@ -59,6 +60,10 @@ pub fn deinit(self: *MemoryManager) void {
     self.structs.deinit(self.allocator);
     self.lists.deinit(self.allocator);
     self.bytecode.deinit(self.allocator);
+    self.keep_alive_strings.deinit(self.allocator);
+    self.keep_alive_structs.deinit(self.allocator);
+    self.keep_alive_lists.deinit(self.allocator);
+    self.keep_alive_bytecode.deinit(self.allocator);
 }
 
 /// Allocate a new string to be managed by the memory manager. If an equivalent string already
@@ -69,7 +74,11 @@ pub fn allocateString(self: *MemoryManager, str: []const u8) ![]const u8 {
         return entry.key_ptr.*;
     }
     const str_copy = try self.allocator.dupe(u8, str);
-    try self.strings.putNoClobber(self.allocator, str_copy, self.reachable_color);
+    try self.strings.put(
+        self.allocator,
+        str_copy,
+        self.reachable_color.swap(),
+    );
     return str_copy;
 }
 
@@ -84,12 +93,17 @@ pub fn allocateSymbolVal(self: *MemoryManager, sym: []const u8) !Val {
 }
 
 /// Allocate a new list of size `len`. All elements within the slice are uninitialized.
-pub fn allocateUninitializedList(self: *MemoryManager, len: usize) ![]Val {
+pub fn allocateListOfNone(self: *MemoryManager, len: usize) ![]Val {
     if (len == 0) {
         return &[0]Val{};
     }
     const lst = try self.allocator.alloc(Val, len);
-    try self.lists.put(self.allocator, lst.ptr, .{ .len = len, .color = self.reachable_color });
+    try self.lists.put(
+        self.allocator,
+        lst.ptr,
+        .{ .len = len, .color = self.reachable_color.swap() },
+    );
+    for (0..len) |idx| lst[idx] = .none;
     return lst;
 }
 
@@ -98,7 +112,7 @@ pub fn allocateList(self: *MemoryManager, contents: []const Val) ![]Val {
     if (contents.len == 0) {
         return &[0]Val{};
     }
-    var lst = try self.allocateUninitializedList(contents.len);
+    var lst = try self.allocateListOfNone(contents.len);
     for (0..contents.len) |idx| lst[idx] = contents[idx];
     return lst;
 }
@@ -111,7 +125,7 @@ pub fn allocateListVal(self: *MemoryManager, contents: []const Val) !Val {
 /// Allocate a new bytecode object.
 pub fn allocateByteCode(self: *MemoryManager, module: *Module) !*ByteCode {
     const bc = try self.allocator.create(ByteCode);
-    try self.bytecode.put(self.allocator, bc, self.reachable_color);
+    try self.bytecode.put(self.allocator, bc, self.reachable_color.swap());
     bc.* = ByteCode{
         .name = "",
         .arg_count = 0,
@@ -127,7 +141,7 @@ pub fn allocateStruct(self: *MemoryManager) !*std.StringHashMapUnmanaged(Val) {
     const m = try self.allocator.create(std.StringHashMapUnmanaged(Val));
     errdefer self.allocator.destroy(m);
     m.* = .{};
-    try self.structs.put(self.allocator, m, self.reachable_color);
+    try self.structs.put(self.allocator, m, self.reachable_color.swap());
     return m;
 }
 
@@ -137,7 +151,12 @@ pub fn markVal(self: *MemoryManager, v: Val) !void {
         .string => |s| try self.strings.put(self.allocator, s, self.reachable_color),
         .symbol => |s| try self.strings.put(self.allocator, s, self.reachable_color),
         .structV => |s| {
-            try self.structs.put(self.allocator, s, self.reachable_color);
+            if (self.structs.getEntry(s)) |entry| {
+                if (entry.value_ptr.* == self.reachable_color) return;
+                entry.value_ptr.* = self.reachable_color;
+            } else {
+                try self.structs.put(self.allocator, s, self.reachable_color);
+            }
             var iter = s.valueIterator();
             while (iter.next()) |structVal| {
                 try self.markVal(structVal.*);

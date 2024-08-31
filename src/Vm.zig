@@ -4,18 +4,20 @@ const Compiler = @import("Compiler.zig");
 const Ir = @import("ir.zig").Ir;
 const Module = @import("Module.zig");
 const std = @import("std");
+const ErrorCollector = @import("datastructures/ErrorCollector.zig");
+const Ast = @import("Ast.zig");
 
-pub const Environment = @import("Environment.zig");
-pub const Error = Environment.Error;
+pub const Env = @import("Env.zig");
+pub const Error = Env.Error;
 pub const NativeFnError = Val.NativeFn.Error;
 pub const Val = @import("val.zig").Val;
 
-env: Environment,
+env: Env,
 
 /// Create a new virtual machine.
-pub fn init(alloc: std.mem.Allocator) std.mem.Allocator.Error!Vm {
+pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!Vm {
     return Vm{
-        .env = try Environment.init(alloc),
+        .env = try Env.init(allocator),
     };
 }
 
@@ -26,93 +28,695 @@ pub fn deinit(self: *Vm) void {
 
 /// Evaluate a single expression from the string.
 ///
-/// tmp_allocator - An allocator to use for parsing and compiling expr. The data will automatically
-///   be freed by evalStr.
+/// allocator - Allocator used to allocate any slices or strings for the return value.
 /// module - The module to run the expression in or "*default*" if null.
 /// expr - The fizz expression to evaluate.
 ///
 /// Note: The returned Val is only valid until the next garbage collection call.
-pub fn evalStr(self: *Vm, tmp_allocator: std.mem.Allocator, expr: []const u8) !Val {
-    var ir = try Ir.initStrExpr(tmp_allocator, expr);
-    defer ir.deinit(tmp_allocator);
-    var compiler = try Compiler.initModule(tmp_allocator, &self.env, try self.env.getOrCreateModule(.{}));
-    defer compiler.deinit();
+pub fn evalStr(self: *Vm, T: type, allocator: std.mem.Allocator, expr: []const u8) !T {
+    var tmp_arena = std.heap.ArenaAllocator.init(self.valAllocator());
+    defer tmp_arena.deinit();
+    const tmp_allocator = tmp_arena.allocator();
+    const ir = try Ir.initStrExpr(tmp_allocator, &self.env.errors, expr);
+    var compiler = try Compiler.initModule(tmp_allocator, &self.env, try self.getOrCreateModule(.{}));
     const bc = try compiler.compile(ir);
-    return self.eval(bc, &.{});
+    const ret_val = try self.evalFuncVal(bc, &.{});
+    return self.toZig(T, allocator, ret_val);
 }
 
 /// Evaluate the function and return the result.
 ///
 /// Note: The returned Val is only valid until the next runGc call.
-pub fn eval(self: *Vm, func: Val, args: []const Val) Error!Val {
+pub fn evalFuncVal(self: *Vm, func: Val, args: []const Val) Error!Val {
     defer self.env.stack.clearRetainingCapacity();
     defer self.env.frames.clearRetainingCapacity();
-    return self.env.evalNoReset(func, args);
+    return self.evalNoReset(func, args);
 }
 
 /// Register a function to the global namespace.
 pub fn registerGlobalFn(
     self: *Vm,
     name: []const u8,
-    func: *const fn (*Environment, []const Val) NativeFnError!Val,
+    func: *const fn (*Vm, []const Val) NativeFnError!Val,
 ) !void {
     const func_val = Val{ .native_fn = .{ .impl = func } };
     try self.env.global_module.setVal(&self.env, name, func_val);
 }
 
-/// Get the memory allocator used to allocate all `Val` types.
-pub fn allocator(self: *const Vm) std.mem.Allocator {
-    return self.env.allocator();
+/// Get the memory allocator used for all `Val`.
+pub fn valAllocator(self: *const Vm) std.mem.Allocator {
+    return self.env.memory_manager.allocator;
+}
+
+/// Convert the val into a Zig value.
+///
+/// T - The type to convert to.
+/// alloc - Allocator used to create strings and slices.
+/// val - The value to convert from.
+pub fn toZig(self: *const Vm, T: type, alloc: std.mem.Allocator, val: Val) !T {
+    if (T == Val) return val;
+    if (T == void) {
+        if (!val.isNone()) return error.TypeError;
+        return;
+    }
+    if (T == bool) return val.asBool();
+    if (T == i64) return val.asInt();
+    if (T == f64) return val.asFloat();
+    if (T == []u8 or T == []const u8) {
+        switch (val) {
+            .string => |s| return try alloc.dupe(u8, s),
+            else => return error.TypeError,
+        }
+    }
+    switch (@typeInfo(T)) {
+        .Pointer => |info| {
+            switch (info.size) {
+                .One => @compileError("Val.toZig does not support pointers."),
+                .Slice => switch (val) {
+                    .list => |lst| {
+                        var ret = try alloc.alloc(info.child, lst.len);
+                        var init_count: usize = 0;
+                        errdefer toZigClean(T, alloc, ret, init_count);
+                        for (0..lst.len) |idx| {
+                            ret[idx] = try self.toZig(info.child, alloc, lst[idx]);
+                            init_count += 1;
+                        }
+                        return ret;
+                    },
+                    else => return error.TypeError,
+                },
+                .Many => @compileError("Val.toZig does not support Many pointers."),
+                .C => @compileError("Val.toZig does not support C pointers."),
+            }
+        },
+        .Struct => |info| {
+            const map = switch (val) {
+                .structV => |m| m,
+                else => return error.TypeError,
+            };
+            var ret: T = undefined;
+            var totalFieldsInit: usize = 0;
+            errdefer inline for (info.fields, 0..info.fields.len) |field, idx| {
+                if (idx < totalFieldsInit) {
+                    toZigClean(field.type, alloc, @field(ret, field.name), null);
+                }
+            };
+            inline for (info.fields, 0..info.fields.len) |field, idx| {
+                totalFieldsInit = idx;
+                var fizz_field_name: [field.name.len]u8 = undefined;
+                @memcpy(&fizz_field_name, field.name);
+                makeKebabCase(&fizz_field_name);
+                const field_val = map.get(&fizz_field_name) orelse
+                    return Error.TypeError;
+                const field_zig_val = try self.toZig(field.type, alloc, field_val);
+                errdefer toZigClean(field.type, alloc, field_zig_val, null);
+                @field(ret, field.name) = field_zig_val;
+            }
+            return ret;
+        },
+        else => {
+            @compileLog("Val.toZig called with type", T);
+            @compileError("Val.toZig called with unsupported Zig type.");
+        },
+    }
+}
+
+fn makeKebabCase(name: []u8) void {
+    for (name, 0..name.len) |ch, idx| {
+        if (ch == '_') name[idx] = '-';
+    }
+}
+
+// T - The type that will be cleaned up.
+// alloc - The allocator used to allocate said values.
+// v - The object to deallocate.
+// slice_init_count - If v is a slice, then this is the number of elements that were initialized or
+//   `null` to deallocate all the elements.
+fn toZigClean(T: type, alloc: std.mem.Allocator, v: T, slice_init_count: ?usize) void {
+    if (T == void or T == bool or T == i64 or T == f64) return;
+    if (T == []u8 or T == []const u8) {
+        alloc.free(v);
+        return;
+    }
+    switch (@typeInfo(T)) {
+        .Pointer => |info| switch (info.size) {
+            .Slice => {
+                const slice = if (slice_init_count) |n| v[0..n] else v;
+                for (slice) |item| toZigClean(info.child, alloc, item, null);
+                alloc.free(v);
+            },
+            else => {
+                @compileLog("Val.toZig called with type", T);
+                @compileError("Val.toZig cleanup for type not implemented.");
+            },
+        },
+        .Struct => |info| {
+            inline for (info.fields) |field| {
+                toZigClean(field.type, alloc, @field(v, field.name), null);
+            }
+        },
+        else => {
+            @compileLog("Val.toZig called with type", @typeName(T));
+            @compileError("Val.toZig cleanup for type not implemented.");
+        },
+    }
+}
+
+/// Run the garbage collector to free up memory.
+pub fn runGc(self: *Vm) !void {
+    var timer = try std.time.Timer.start();
+    defer self.env.runtime_stats.gc_duration_nanos += timer.read();
+    for (self.env.stack.items) |v| try self.env.memory_manager.markVal(v);
+    for (self.env.frames.items) |f| try self.env.memory_manager.markVal(.{ .bytecode = f.bytecode });
+
+    var global_values = self.env.global_module.iterateVals();
+    while (global_values.next()) |v| {
+        try self.env.memory_manager.markVal(v);
+    }
+
+    var modules_iterator = self.env.modules.valueIterator();
+    while (modules_iterator.next()) |module| {
+        var vals_iterator = module.*.iterateVals();
+        while (vals_iterator.next()) |v| {
+            try self.env.memory_manager.markVal(v);
+        }
+    }
+
+    var strings_iter = self.env.memory_manager.keep_alive_strings.keyIterator();
+    while (strings_iter.next()) |v| try self.env.memory_manager.markVal(.{ .string = v.* });
+
+    var list_iter = self.env.memory_manager.keep_alive_lists.keyIterator();
+    while (list_iter.next()) |v| {
+        if (self.env.memory_manager.lists.get(v.*)) |len_and_color|
+            try self.env.memory_manager.markVal(.{ .list = v.*[0..len_and_color.len] });
+    }
+
+    var structs_iter = self.env.memory_manager.keep_alive_structs.keyIterator();
+    while (structs_iter.next()) |v| try self.env.memory_manager.markVal(.{ .structV = v.* });
+
+    var bytecode_iter = self.env.memory_manager.keep_alive_bytecode.keyIterator();
+    while (bytecode_iter.next()) |v| try self.env.memory_manager.markVal(.{ .bytecode = v.* });
+
+    try self.env.memory_manager.sweep();
+}
+
+pub fn keepAlive(self: *Vm, val: Val) !void {
+    const mm = &self.env.memory_manager;
+    switch (val) {
+        .string => |s| try self.refIncr(&mm.keep_alive_strings, s),
+        .symbol => |s| try self.refIncr(&mm.keep_alive_strings, s),
+        .list => |lst| try self.refIncr(&mm.keep_alive_lists, lst.ptr),
+        .structV => |strct| try self.refIncr(&mm.keep_alive_structs, strct),
+        .bytecode => |bc| try self.refIncr(&mm.keep_alive_bytecode, bc),
+        else => {},
+    }
+}
+
+inline fn refIncr(self: *Vm, map: anytype, obj: anytype) !void {
+    const entry = try map.getOrPutValue(self.valAllocator(), obj, 0);
+    entry.value_ptr.* += 1;
+}
+
+pub fn allowDeath(self: *Vm, val: Val) void {
+    const mm = &self.env.memory_manager;
+    switch (val) {
+        .string => |s| try self.refDecr(&mm.keep_alive_strings, s),
+        .symbol => |s| try self.refDecr(&mm.keep_alive_strings, s),
+        .list => |lst| try self.refDecr(&mm.keep_alive_lists, lst.ptr),
+        .structV => |strct| try self.refDecr(&mm.keep_alive_structs, strct),
+        .bytecode => |bc| try self.refDecr(&mm.keep_alive_bytecode, bc),
+        else => {},
+    }
+}
+
+inline fn refDecr(_: *Vm, map: anytype, obj: anytype) !void {
+    if (map.getEntry(obj)) |entry| {
+        entry.value_ptr.* -= 1;
+        if (entry.value_ptr.* == 0) map.removeByPtr(entry.key_ptr);
+    }
+}
+
+/// Get the module with the given name. If it does not exist, then it is created.
+pub fn getOrCreateModule(self: *Vm, builder: Module.Builder) !*Module {
+    if (self.getModule(builder.name)) |m| {
+        return m;
+    }
+    const m = try Module.init(self.valAllocator(), builder);
+    try self.registerModule(m);
+    return m;
+}
+
+/// Get the Module by name or null if it does not exist.
+pub fn getModule(self: *Vm, name: []const u8) ?*Module {
+    if (std.mem.eql(u8, name, self.env.global_module.name)) {
+        return &self.env.global_module;
+    }
+    return self.env.modules.get(name);
+}
+
+/// Register a module. An error is returned if there is a memory error or the module already exists.
+pub fn registerModule(self: *Vm, module: *Module) !void {
+    if (self.getModule(module.name)) |_| {
+        return error.ModuleAlreadyExists;
+    }
+    try self.env.modules.put(self.valAllocator(), module.name, module);
+}
+
+/// Delete a module.
+pub fn deleteModule(self: *Vm, module: *Module) !void {
+    const module_entry = self.env.modules.getEntry(module.name) orelse return error.ModuleDoesNotExist;
+
+    // Remove from any aliases.
+    var del_arena = std.heap.ArenaAllocator.init(self.valAllocator());
+    defer del_arena.deinit();
+    var modules_iter = self.env.modules.valueIterator();
+    while (modules_iter.next()) |any_module| {
+        if (any_module.* == module) continue;
+        var aliases_to_delete = std.ArrayList([]const u8).init(del_arena.allocator());
+        var aliases_iter = any_module.*.alias_to_module.iterator();
+        while (aliases_iter.next()) |alias| {
+            if (alias.value_ptr.* == module) {
+                try aliases_to_delete.append(alias.key_ptr.*);
+            }
+        }
+        for (aliases_to_delete.items) |a| _ = any_module.*.clearModuleAlias(self.valAllocator(), a);
+        _ = del_arena.reset(.retain_capacity);
+    }
+
+    // Remove the module.
+    self.env.modules.removeByPtr(module_entry.key_ptr);
+    module.deinit(self.valAllocator());
+}
+
+/// Evaluate the function and return the result.
+///
+/// Compared to the `eval` function present in `Vm`, this function can be called from a native
+/// function as it does not reset the function call and data stacks after execution.
+///
+/// Note: The returned Val is only valid until the next runGc call. Use `self.toZig` to extend the
+/// lifetime if needed.
+pub fn evalNoReset(self: *Vm, func: Val, args: []const Val) Error!Val {
+    self.env.runtime_stats.function_calls += 1;
+    if (self.env.gc_strategy == .per_256_calls and self.env.runtime_stats.function_calls % 256 == 0)
+        self.runGc() catch return Error.RuntimeError;
+    const stack_start = self.env.stack.items.len;
+    // TODO: The following is fragile as it duplicates a lot of executeEval.
+    switch (func) {
+        .bytecode => |bc| {
+            const frame = .{
+                .bytecode = bc,
+                .instruction = bc.instructions.items.ptr,
+                .stack_start = stack_start,
+                .ffi_boundary = true,
+            };
+            try self.env.stack.appendNTimes(self.valAllocator(), .none, bc.locals_count);
+            self.env.frames.appendAssumeCapacity(frame);
+            try self.env.stack.appendSlice(self.valAllocator(), args);
+            while (try self.runNext()) {}
+            if (self.env.stack.items.len > stack_start) {
+                const ret = self.env.stack.pop();
+                self.env.stack.items = self.env.stack.items[0..stack_start];
+                return ret;
+            } else {
+                @setCold(true);
+                return .none;
+            }
+        },
+        .native_fn => |nf| {
+            try self.env.stack.appendSlice(self.valAllocator(), args);
+            const ret = try nf.impl(self, args);
+            if (self.env.stack.items.len > stack_start) self.env.stack.items = self.env.stack.items[0..stack_start];
+            return ret;
+        },
+        else => return Error.TypeError,
+    }
+}
+
+fn runNext(self: *Vm) Error!bool {
+    var frame = &self.env.frames.items[self.env.frames.items.len - 1];
+    switch (frame.instruction[0]) {
+        .get_arg => |idx| try self.executeGetArg(frame, idx),
+        .move => |idx| try self.executeMove(frame, idx),
+        .push_const => |v| try self.executePushConst(v),
+        .ret => {
+            const should_continue = try self.executeRet();
+            if (!should_continue) return false;
+        },
+        .deref_local => |s| {
+            const mod_and_sym = Module.parseModuleAndSymbol(s);
+            if (mod_and_sym.module_alias) |alias| {
+                const m = frame.bytecode.module.alias_to_module.get(alias) orelse {
+                    const msg = try std.fmt.allocPrint(self.env.errors.allocator(), "Module {s} not found", .{alias});
+                    try self.env.errors.addErrorOwned(.{ .msg = msg });
+                    return Error.SymbolNotFound;
+                };
+                try self.executeDeref(m, mod_and_sym.symbol);
+            } else {
+                try self.executeDeref(frame.bytecode.module, mod_and_sym.symbol);
+            }
+        },
+        .deref_global => |s| try self.executeDeref(&self.env.global_module, s),
+        .eval => |n| try self.executeEval(frame, n),
+        .jump => |n| frame.instruction += n,
+        .jump_if => |n| if (try self.env.stack.pop().asBool()) {
+            frame.instruction += n;
+        },
+        .define => |symbol| try self.executeDefine(frame.bytecode.module, symbol.symbol),
+        .import_module => |path| try self.executeImportModule(frame.bytecode.module, path),
+    }
+    frame.instruction += 1;
+    return true;
+}
+
+fn executePushConst(self: *Vm, v: Val) !void {
+    try self.env.stack.append(self.valAllocator(), v);
+}
+
+fn executeDeref(self: *Vm, module: *const Module, sym: []const u8) Error!void {
+    const v = module.getVal(sym) orelse {
+        const msg = try std.fmt.allocPrint(
+            self.env.errors.allocator(),
+            "Symbol {s} not found in module {s}",
+            .{ sym, module.name },
+        );
+        try self.env.errors.addErrorOwned(.{ .msg = msg });
+        return Error.SymbolNotFound;
+    };
+    try self.env.stack.append(self.valAllocator(), v);
+}
+
+fn executeGetArg(self: *Vm, frame: *const Env.Frame, idx: usize) !void {
+    const v = self.env.stack.items[frame.stack_start + idx];
+    try self.env.stack.append(self.valAllocator(), v);
+}
+
+fn executeMove(self: *Vm, frame: *const Env.Frame, idx: usize) !void {
+    const v = self.env.stack.popOrNull() orelse {
+        try self.env.errors.addError(.{ .msg = "unexpected code branch reached, file a GitHub issue" });
+        return error.RuntimeError;
+    };
+    self.env.stack.items[frame.stack_start + idx] = v;
+}
+
+fn executeEval(self: *Vm, frame: *const Env.Frame, n: usize) !void {
+    self.env.runtime_stats.function_calls += 1;
+    if (self.env.gc_strategy == .per_256_calls and self.env.runtime_stats.function_calls % 256 == 0)
+        self.runGc() catch return Error.RuntimeError;
+    const norm_n: usize = if (n == 0) self.env.stack.items.len - frame.stack_start else n;
+    const arg_count = norm_n - 1;
+    const fn_idx = self.env.stack.items.len - norm_n;
+    const func = self.env.stack.items[fn_idx];
+    const stack_start = fn_idx + 1;
+    switch (func) {
+        .bytecode => |bc| {
+            if (bc.arg_count != arg_count) {
+                const msg = try std.fmt.allocPrint(
+                    self.env.errors.allocator(),
+                    "Function {s} received {d} arguments but expected {d}",
+                    .{ bc.name, arg_count, bc.arg_count },
+                );
+                try self.env.errors.addErrorOwned(.{ .msg = msg });
+                return error.ArrityError;
+            }
+            try self.env.stack.appendNTimes(self.valAllocator(), .none, bc.locals_count);
+            const new_frame = Env.Frame{
+                .bytecode = bc,
+                .instruction = bc.instructions.items.ptr,
+                .stack_start = stack_start,
+                .ffi_boundary = false,
+            };
+            self.env.frames.appendAssumeCapacity(new_frame);
+        },
+        .native_fn => |nf| {
+            self.env.stack.items[fn_idx] = try nf.impl(self, self.env.stack.items[stack_start..]);
+            self.env.stack.items = self.env.stack.items[0..stack_start];
+        },
+        else => {
+            const msg = try std.fmt.allocPrint(
+                self.env.errors.allocator(),
+                "Expected to evaluate value of type function but got {any}",
+                .{func.tag()},
+            );
+            try self.env.errors.addErrorOwned(.{ .msg = msg });
+            return error.TypeError;
+        },
+    }
+}
+
+fn executeRet(self: *Vm) !bool {
+    const old_frame = self.env.frames.pop();
+    if (old_frame.ffi_boundary) {
+        return false;
+    }
+    const ret = self.env.stack.popOrNull() orelse .none;
+    self.env.stack.items = self.env.stack.items[0..old_frame.stack_start];
+    self.env.stack.items[old_frame.stack_start - 1] = ret;
+    return true;
+}
+
+fn executeDefine(self: *Vm, module: *Module, symbol: []const u8) Error!void {
+    const val = self.env.stack.pop();
+    try module.setVal(&self.env, symbol, val);
+}
+
+fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Error!void {
+    errdefer {
+        self.env.errors.addError(ErrorCollector.Error{ .msg = "failed to import module" }) catch {};
+    }
+    const base_dir = module.directory() catch {
+        const msg = try std.fmt.allocPrint(
+            self.env.errors.allocator(),
+            "could not determine working directory for module {s}",
+            .{module.name},
+        );
+        try self.env.errors.addErrorOwned(.{ .msg = msg });
+        return Error.FileError;
+    };
+    const full_path = base_dir.realpathAlloc(self.valAllocator(), module_path) catch {
+        const msg = try std.fmt.allocPrint(
+            self.env.errors.allocator(),
+            "could not determine path for {s}",
+            .{module_path},
+        );
+        try self.env.errors.addErrorOwned(.{ .msg = msg });
+        return Error.FileError;
+    };
+    defer self.valAllocator().free(full_path);
+    const module_alias = Module.defaultModuleAlias(full_path);
+    if (self.getModule(full_path)) |m| {
+        try module.setModuleAlias(self.valAllocator(), module_alias, m);
+        return;
+    }
+
+    var arena = std.heap.ArenaAllocator.init(self.valAllocator());
+    defer arena.deinit();
+    const file_size_limit = 64 * 1024 * 1024;
+    const contents = std.fs.cwd().readFileAlloc(arena.allocator(), full_path, file_size_limit) catch {
+        const msg = try std.fmt.allocPrint(
+            self.env.errors.allocator(),
+            "could not read file {any}",
+            .{full_path},
+        );
+        try self.env.errors.addErrorOwned(.{ .msg = msg });
+        return Error.FileError;
+    };
+    const ast = Ast.initWithStr(arena.allocator(), &self.env.errors, contents) catch return Error.SyntaxError;
+    var module_ok = false;
+    const new_module = self.getOrCreateModule(.{ .name = full_path }) catch return Error.RuntimeError;
+    errdefer if (!module_ok) self.deleteModule(new_module) catch {};
+    const ir = Ir.init(arena.allocator(), &self.env.errors, ast.asts) catch return Error.RuntimeError;
+    var compiler = try Compiler.initModule(arena.allocator(), &self.env, new_module);
+    const module_bytecode = compiler.compile(ir) catch Error.RuntimeError;
+    _ = try self.evalNoReset(try module_bytecode, &.{});
+    module_ok = true;
+    try module.setModuleAlias(self.valAllocator(), module_alias, new_module);
+}
+
+test "can convert to zig val" {
+    var env = try init(std.testing.allocator);
+    defer env.deinit();
+
+    try std.testing.expectEqual(false, env.toZig(bool, std.testing.allocator, .{ .boolean = false }));
+    try std.testing.expectEqual(42, env.toZig(i64, std.testing.allocator, .{ .int = 42 }));
+    try env.toZig(void, std.testing.allocator, .none);
+}
+
+test "can convert to zig string" {
+    var env = try init(std.testing.allocator);
+    defer env.deinit();
+
+    const actual_str = try env.toZig([]const u8, std.testing.allocator, .{ .string = "string" });
+    defer std.testing.allocator.free(actual_str);
+    try std.testing.expectEqualStrings("string", actual_str);
+}
+
+test "can convert to zig slice" {
+    var env = try init(std.testing.allocator);
+    defer env.deinit();
+
+    const actual_int_list = try env.toZig(
+        []i64,
+        std.testing.allocator,
+        Val{ .list = @constCast(&[_]Val{ Val{ .int = 1 }, Val{ .int = 2 } }) },
+    );
+    defer std.testing.allocator.free(actual_int_list);
+    try std.testing.expectEqualDeep(&[_]i64{ 1, 2 }, actual_int_list);
+
+    const actual_float_list_list = try env.toZig(
+        [][]f64,
+        std.testing.allocator,
+        Val{ .list = @constCast(
+            &[_]Val{
+                Val{ .list = @constCast(&[_]Val{ .{ .float = 1.0 }, .{ .float = 2.0 } }) },
+                Val{ .list = @constCast(&[_]Val{ .{ .float = 3.0 }, .{ .float = 4.0 } }) },
+            },
+        ) },
+    );
+    defer std.testing.allocator.free(actual_float_list_list);
+    defer for (actual_float_list_list) |lst| std.testing.allocator.free(lst);
+    try std.testing.expectEqualDeep(
+        &[_][]const f64{
+            &[_]f64{ 1.0, 2.0 },
+            &[_]f64{ 3.0, 4.0 },
+        },
+        actual_float_list_list,
+    );
+}
+
+test "can't convert list of heterogenous types" {
+    var env = try init(std.testing.allocator);
+    defer env.deinit();
+    try std.testing.expectError(
+        error.TypeError,
+        env.toZig(
+            [][]u8,
+            std.testing.allocator,
+            Val{ .list = @constCast(
+                &[_]Val{
+                    Val{ .list = @constCast(&[_]Val{ .{ .string = "good" }, .{ .string = "also good" } }) },
+                    Val{ .list = @constCast(&[_]Val{ .{ .string = "still good" }, .{ .symbol = "bad" } }) },
+                },
+            ) },
+        ),
+    );
+}
+
+test "can convert to zig struct" {
+    var vm = try @import("Vm.zig").init(std.testing.allocator);
+    defer vm.deinit();
+
+    _ = try vm.evalStr(void, std.testing.allocator, "(define string \"string\")");
+    _ = try vm.evalStr(void, std.testing.allocator, "(define lst (list 0 1 2))");
+    _ = try vm.evalStr(void, std.testing.allocator, "(define strct (struct 'a-val 1 'b-val 2.0))");
+
+    const TestType = struct {
+        string: []const u8,
+        list: []const i64,
+        strct: struct { a_val: i64, b_val: f64 },
+    };
+    const actual = try vm.evalStr(
+        TestType,
+        std.testing.allocator,
+        "(struct 'string string 'list lst 'strct strct)",
+    );
+    defer std.testing.allocator.free(actual.string);
+    defer std.testing.allocator.free(actual.list);
+    try std.testing.expectEqualDeep(
+        TestType{
+            .string = "string",
+            .list = &[_]i64{ 0, 1, 2 },
+            .strct = .{ .a_val = 1, .b_val = 2.0 },
+        },
+        actual,
+    );
+}
+
+test "can convert to zig slice of structs" {
+    var vm = try @import("Vm.zig").init(std.testing.allocator);
+    defer vm.deinit();
+
+    try vm.evalStr(void, std.testing.allocator, "(define x (struct 'a 1 'b 2))");
+
+    const TestType = struct { a: i64, b: i64 };
+    const actual = try vm.evalStr([]TestType, std.testing.allocator, "(list x x x)");
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualDeep(
+        &[_]TestType{
+            .{ .a = 1, .b = 2 },
+            .{ .a = 1, .b = 2 },
+            .{ .a = 1, .b = 2 },
+        },
+        actual,
+    );
+}
+
+test "partially built struct cleans up" {
+    var vm = try @import("Vm.zig").init(std.testing.allocator);
+    defer vm.deinit();
+
+    try vm.evalStr(void, std.testing.allocator, "(define string \"string\")");
+    try vm.evalStr(void, std.testing.allocator, "(define bad-list (list 0 1 2 \"bad\"))");
+    const TestType = struct {
+        string: []const u8,
+        list: []const i64,
+    };
+    try std.testing.expectError(
+        error.TypeError,
+        vm.evalStr(TestType, std.testing.allocator, "(struct 'string string 'list bad-list)"),
+    );
+}
+
+fn quack(vm: *Vm, _: []const Val) NativeFnError!Val {
+    return vm.env.memory_manager.allocateStringVal("quack!") catch return Error.RuntimeError;
 }
 
 // Tests the example code from site/index.md.
 test "index.md example test" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    _ = try vm.evalStr(std.testing.allocator, "(define args (list 1 2 3 4))");
-    const v = try vm.evalStr(std.testing.allocator, "args");
-    const actual = try vm.env.toZig([]i64, std.testing.allocator, v);
-    defer std.testing.allocator.free(actual);
-    try std.testing.expectEqualDeep(&[_]i64{ 1, 2, 3, 4 }, actual);
+    errdefer std.debug.print("Fizz VM failed:\n{any}\n", .{vm.env.errors});
+
+    try vm.evalStr(void, std.testing.allocator, "(define my-list (list 1 2 3 4))");
+    const sum = vm.evalStr(i64, std.testing.allocator, "(apply + my-list)");
+    try std.testing.expectEqual(10, sum);
+
+    try vm.registerGlobalFn("quack!", quack);
+    const text = try vm.evalStr([]u8, std.testing.allocator, "(quack!)");
+    defer std.testing.allocator.free(text);
+    try std.testing.expectEqualStrings("quack!", text);
 }
 
 // Tests the example code from site/zig-api.md
 test "zig-api.md example test" {
-    var alloc = std.testing.allocator;
-    var vm = try Vm.init(alloc);
+    var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
 
-    _ = try vm.evalStr(alloc, "(define magic-numbers (list 1 2 3 4))");
-    const val = try vm.evalStr(alloc, "(struct 'numbers magic-numbers 'numbers-sum (apply + magic-numbers))");
-
+    _ = try vm.evalStr(Val, std.testing.allocator, "(define magic-numbers (list 1 2 3 4))");
     const ResultType = struct { numbers: []const i64, numbers_sum: i64 };
-    const result = try vm.env.toZig(
-        ResultType,
-        alloc,
-        val,
-    );
-    defer alloc.free(result.numbers);
+    const actual = try vm.evalStr(ResultType, std.testing.allocator, "(struct 'numbers magic-numbers 'numbers-sum (apply + magic-numbers))");
+    defer std.testing.allocator.free(actual.numbers);
     try std.testing.expectEqualDeep(
         ResultType{ .numbers = &[_]i64{ 1, 2, 3, 4 }, .numbers_sum = 10 },
-        result,
+        actual,
     );
 }
 
 test "can eval basic expression" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr(std.testing.allocator, "4");
-    try vm.env.runGc();
-    try std.testing.expectEqual(Val{ .int = 4 }, actual);
+
+    const actual = try vm.evalStr(i64, std.testing.allocator, "4");
+    try vm.runGc();
+    try std.testing.expectEqual(4, actual);
     try std.testing.expectEqual(1, vm.env.runtime_stats.function_calls);
 }
 
 test "multiple expressions returns last expression" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr(std.testing.allocator, "4 5 6");
-    try vm.env.runGc();
-    try std.testing.expectEqual(Val{ .int = 6 }, actual);
+    const actual = try vm.evalStr(i64, std.testing.allocator, "4 5 6");
+    try vm.runGc();
+    try std.testing.expectEqual(actual, actual);
     try std.testing.expectEqual(1, vm.env.runtime_stats.function_calls);
 }
 
@@ -120,29 +724,34 @@ test "can deref symbols" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
     try vm.env.global_module.setVal(&vm.env, "test", try vm.env.memory_manager.allocateStringVal("test-val"));
-    const actual = try vm.evalStr(std.testing.allocator, "test");
-    try std.testing.expectEqualDeep(Val{ .string = @constCast("test-val") }, actual);
+    const actual = try vm.evalStr([]const u8, std.testing.allocator, "test");
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualDeep("test-val", actual);
 }
 
 test "lambda can eval" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr(std.testing.allocator, "((lambda (x) x) true)");
-    try std.testing.expectEqualDeep(Val{ .boolean = true }, actual);
+    const actual = try vm.evalStr(bool, std.testing.allocator, "((lambda (x) x) true)");
+    try std.testing.expectEqualDeep(true, actual);
 }
 
 test "apply takes native function and list" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr(std.testing.allocator, "(apply + (list 1 2 3 4))");
-    try std.testing.expectEqualDeep(Val{ .int = 10 }, actual);
+    const actual = try vm.evalStr(i64, std.testing.allocator, "(apply + (list 1 2 3 4))");
+    try std.testing.expectEqualDeep(10, actual);
 }
 
 test "apply takes bytecode function and list" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    const actual = try vm.evalStr(std.testing.allocator, "(apply (lambda (a b c d) (- 0 a b c d)) (list 1 2 3 4))");
-    try std.testing.expectEqualDeep(Val{ .int = -10 }, actual);
+    const actual = try vm.evalStr(
+        i64,
+        std.testing.allocator,
+        "(apply (lambda (a b c d) (- 0 a b c d)) (list 1 2 3 4))",
+    );
+    try std.testing.expectEqualDeep(-10, actual);
 }
 
 test "recursive function can eval" {
@@ -150,11 +759,11 @@ test "recursive function can eval" {
     defer vm.deinit();
     try std.testing.expectEqualDeep(
         Val.none,
-        try vm.evalStr(std.testing.allocator, "(define fib (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))"),
+        try vm.evalStr(Val, std.testing.allocator, "(define fib (lambda (n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))"),
     );
     try std.testing.expectEqualDeep(
-        Val{ .int = 55 },
-        try vm.evalStr(std.testing.allocator, "(fib 10)"),
+        55,
+        try vm.evalStr(i64, std.testing.allocator, "(fib 10)"),
     );
     try std.testing.expectEqualDeep(620, vm.env.runtime_stats.function_calls);
 }
@@ -162,31 +771,31 @@ test "recursive function can eval" {
 test "can only deref symbols from the same module" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    try (try vm.env.getOrCreateModule(.{ .name = "*other*" }))
+    try (try vm.getOrCreateModule(.{ .name = "*other*" }))
         .setVal(&vm.env, "test", try vm.env.memory_manager.allocateStringVal("test-val"));
     try std.testing.expectError(
         error.SymbolNotFound,
-        vm.evalStr(std.testing.allocator, "test"),
+        vm.evalStr(Val, std.testing.allocator, "test"),
     );
 }
 
 test "symbols from imported modules can be referenced" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    _ = try vm.evalStr(std.testing.allocator, "(import \"test_scripts/geometry.fizz\")");
+    _ = try vm.evalStr(Val, std.testing.allocator, "(import \"test_scripts/geometry.fizz\")");
     try std.testing.expectEqualDeep(
-        Val{ .float = 3.14 },
-        try vm.evalStr(std.testing.allocator, "geometry/pi"),
+        3.14,
+        try vm.evalStr(f64, std.testing.allocator, "geometry/pi"),
     );
 }
 
 test "module imports are relative" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    try std.testing.expectEqualDeep(Val.none, vm.evalStr(std.testing.allocator, "(import \"test_scripts/import.fizz\")"));
+    try std.testing.expectEqualDeep({}, try vm.evalStr(void, std.testing.allocator, "(import \"test_scripts/import.fizz\")"));
     try std.testing.expectEqualDeep(
-        Val{ .float = 6.28 },
-        try vm.evalStr(std.testing.allocator, "import/two-pi"),
+        6.28,
+        try vm.evalStr(f64, std.testing.allocator, "import/two-pi"),
     );
 }
 
@@ -195,7 +804,7 @@ test "import bad file fails" {
     defer vm.deinit();
     try std.testing.expectError(
         error.TypeError,
-        vm.evalStr(std.testing.allocator, "(import \"test_scripts/fail.fizz\")"),
+        vm.evalStr(Val, std.testing.allocator, "(import \"test_scripts/fail.fizz\")"),
     );
 }
 
@@ -204,46 +813,57 @@ test "->str" {
     defer vm.deinit();
     try std.testing.expectEqualStrings(
         "4",
-        (try vm.evalStr(std.testing.allocator, "(->str 4)")).string,
+        (try vm.evalStr(Val, std.testing.allocator, "(->str 4)")).string,
     );
     try std.testing.expectEqualStrings(
         "cat",
-        (try vm.evalStr(std.testing.allocator, "(->str \"cat\")")).string,
+        (try vm.evalStr(Val, std.testing.allocator, "(->str \"cat\")")).string,
     );
     try std.testing.expectEqualStrings(
         "<function _>",
-        (try vm.evalStr(std.testing.allocator, "(->str (lambda () 4))")).string,
+        (try vm.evalStr(Val, std.testing.allocator, "(->str (lambda () 4))")).string,
     );
     try std.testing.expectEqualStrings(
         "(1 2 <function _>)",
-        (try vm.evalStr(std.testing.allocator, "(->str (list 1 2 (lambda () 4)))")).string,
+        (try vm.evalStr(Val, std.testing.allocator, "(->str (list 1 2 (lambda () 4)))")).string,
     );
 }
 
 test "struct can build and get" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    (try vm.evalStr(std.testing.allocator, "(define x (struct 'id 0 'message \"hello world\"))")).none;
+    try vm.evalStr(void, std.testing.allocator, "(define x (struct 'id 0 'message \"hello world\"))");
     try std.testing.expectEqual(
         0,
-        (try vm.evalStr(std.testing.allocator, "(struct-get x 'id)")).int,
+        try vm.evalStr(i64, std.testing.allocator, "(struct-get x 'id)"),
     );
     try std.testing.expectEqualStrings(
         "hello world",
-        (try vm.evalStr(std.testing.allocator, "(struct-get x 'message)")).string,
+        (try vm.evalStr(Val, std.testing.allocator, "(struct-get x 'message)")).string,
     );
     try std.testing.expectError(
         error.RuntimeError,
-        vm.evalStr(std.testing.allocator, "(struct-get x 'does-not-exist)"),
+        vm.evalStr(Val, std.testing.allocator, "(struct-get x 'does-not-exist)"),
     );
 }
 
 test "struct get with nonexistant field fails" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    (try vm.evalStr(std.testing.allocator, "(define x (struct 'id 0 'message \"hello world\"))")).none;
+    try vm.evalStr(void, std.testing.allocator, "(define x (struct 'id 0 'message \"hello world\"))");
     try std.testing.expectError(
         error.RuntimeError,
-        vm.evalStr(std.testing.allocator, "(struct-get x 'does-not-exist)"),
+        vm.evalStr(Val, std.testing.allocator, "(struct-get x 'does-not-exist)"),
     );
+}
+
+test "can keep alive" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    const actual = try vm.evalStr(Val, std.testing.allocator, "\"test\"");
+    try std.testing.expectEqualStrings("test", actual.string);
+    try vm.keepAlive(actual);
+    defer vm.allowDeath(actual);
+    try vm.runGc();
+    try std.testing.expectEqualStrings("test", actual.string);
 }

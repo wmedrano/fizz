@@ -304,7 +304,7 @@ or equal to the length of the list.
 $1 = 2
 ```
 
-### map (0.2.0 candidate)
+### map
 
 `(map <function> <list>)`
 
@@ -315,7 +315,7 @@ Returns a list by applying `<function>` to each element in `<list>`.
 $1 = (2 3 4)
 ```
 
-### filter (0.2.0 candidate)
+### filter
 
 `(filter <function> <list>)`
 
