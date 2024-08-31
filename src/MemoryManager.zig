@@ -9,15 +9,21 @@ const std = @import("std");
 allocator: std.mem.Allocator,
 /// The color to tag all data that is reachable as opposed to unreachable. Unreachable data is
 /// cleaned up for garbage collection.
-reachable_color: Color,
+reachable_color: Color = Color.red,
+
 /// A map from an owned string to its reachable color.
-strings: std.StringHashMapUnmanaged(Color),
+strings: std.StringHashMapUnmanaged(Color) = .{},
 /// A map from a struct pointer to its Color.
-structs: std.AutoHashMapUnmanaged(*std.StringHashMapUnmanaged(Val), Color),
+structs: std.AutoHashMapUnmanaged(*std.StringHashMapUnmanaged(Val), Color) = .{},
 /// A map from an owned list pointer to its length and color.
-lists: std.AutoHashMapUnmanaged([*]Val, LenAndColor),
+lists: std.AutoHashMapUnmanaged([*]Val, LenAndColor) = .{},
 /// A map from a bytecode pointer to its color.
-bytecode: std.AutoHashMapUnmanaged(*ByteCode, Color),
+bytecode: std.AutoHashMapUnmanaged(*ByteCode, Color) = .{},
+
+keep_alive_strings: std.StringHashMapUnmanaged(usize) = .{},
+keep_alive_structs: std.AutoHashMapUnmanaged(*std.StringHashMapUnmanaged(Val), usize) = .{},
+keep_alive_lists: std.AutoHashMapUnmanaged([*]Val, usize) = .{},
+keep_alive_bytecode: std.AutoHashMapUnmanaged(*ByteCode, usize) = .{},
 
 /// Stores a length and a color.
 const LenAndColor = struct {
@@ -43,11 +49,6 @@ const Color = enum {
 pub fn init(allocator: std.mem.Allocator) MemoryManager {
     return .{
         .allocator = allocator,
-        .reachable_color = Color.red,
-        .strings = .{},
-        .structs = .{},
-        .lists = .{},
-        .bytecode = .{},
     };
 }
 
@@ -59,6 +60,10 @@ pub fn deinit(self: *MemoryManager) void {
     self.structs.deinit(self.allocator);
     self.lists.deinit(self.allocator);
     self.bytecode.deinit(self.allocator);
+    self.keep_alive_strings.deinit(self.allocator);
+    self.keep_alive_structs.deinit(self.allocator);
+    self.keep_alive_lists.deinit(self.allocator);
+    self.keep_alive_bytecode.deinit(self.allocator);
 }
 
 /// Allocate a new string to be managed by the memory manager. If an equivalent string already

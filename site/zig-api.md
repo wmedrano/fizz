@@ -15,7 +15,7 @@ can be used to hold any value returned by the VM.
 
 {: .warning}
 > Any `fizz.Val` that is returned is guaranteed to exist until the next garbage
-> collection run. Use a concrete Zig type, (e.g. []u8) to ensure that the
+> collection run. Use a concrete Zig type, (e.g. []u8) to ensure that an
 > allocator is used to extend the lifetime.
 
 ```zig
@@ -38,13 +38,13 @@ const val = try fizz.evalStr(i64, allocator, "(+ 1 2)");
 ## Extracting Values
 
 Values from the Fizz VM are extracted from `fizz.Vm.evalStr`. They can also manually
-be extracted from a `fizz.Val` by calling `vm.env.toZig`.
+be extracted from a `fizz.Val` by calling `vm.toZig`.
 
 ```zig
-fn toZig(self: *fizz.Env, comptime T: type, allocator: std.mem.Allocator, val: fizz.Val) !T
+fn toZig(self: *fizz.Vm, comptime T: type, allocator: std.mem.Allocator, val: fizz.Val) !T
 ```
 
-- `self`: A pointer to the environment.
+- `self`: A pointer to the VM.
 - `T`: The desired output Zig type. If no conversion is desired, `fizz.Val` will
   return the raw Value object.
 - `allocator`: Memory allocator for any string or slice allocations.
@@ -55,7 +55,7 @@ fn toZig(self: *fizz.Env, comptime T: type, allocator: std.mem.Allocator, val: f
 ```zig
 fn buildStringInFizz(allocator: std.mem.allocator, vm: *fizz.Vm) ![]const u8 {
    const val = try vm.evalStr(fizz.Val, allocator, "(str-concat (list \"hello\" \" \" \"world\"))");
-   const string_val = try vm.env.toZig([]const u8, val);
+   const string_val = try vm.toZig([]const u8, val);
    return string_val;
 }
 ```
@@ -85,9 +85,9 @@ with the `snake_case` field names mapping to `kebab-case`. For example,
 const TestType = struct {
     // Will be derived from `my-string field with a string.
     my_string: []const u8,
-	// Will be derived from 'my-list field with a list of ints.
+    // Will be derived from 'my-list field with a list of ints.
     my_list: []const i64,
-	// Will be derived from 'nested field with the appropriate struct.
+    // Will be derived from 'nested field with the appropriate struct.
     nested: struct { a: i64, b: f64 },
 };
 
@@ -109,14 +109,14 @@ until either `Vm.deinit` or when the vm periodically runs `Vm.runGc`. The gc
 strategy may be set by calling: `vm.env.gc_strategy = <strategy>;`. The possible
 strategies are:
 
-### .per_256_calls
+### `.per_256_calls`
 
 The garbage collector automatically runs every 256 function calls. This counts
 any internal function calls and the initial entrance. For example,
 `vm.evalStr(..., "(+ 1 2 3)")` has 2 function calls, the initial enstance call
 and the call to `+`.
 
-### .manual
+### `.manual`
 
 The garbage collector is never invoked automatically. It must be manually
 invoked with `runGc`.
@@ -133,42 +133,43 @@ defer vm.deinit();
 try vm.runGc();
 ```
 
-### Fiz Value Lifetimes
+### Value Lifetimes
 
-Values that require allocation (everything that is not `int` or `float` are not
-guaranteed to live passed an evaluation due to garbage collection. Note that
-this only applies to `fizz.Val`. Values that have been converted have been reallocated.
+A Value that require allocation (anything that is **not** a `none`, `bool`,
+`int` or `float`) is not guaranteed to live passed an `eval` call due to garbage
+collection. Note that this only applies to `fizz.Val`. Values that have been
+converted, like `[]u8`, have been allocated using the passed in allocator.
 
 ```zig
-	const example_val = try vm.evalStr(Val, allocator, "\"test\"");
-	const example_str = try vm.evalStr([]const u8, allocator, "\"test\"");
-	defer allocater.free(example_str);
+const example_val = try vm.evalStr(Val, allocator, "\"test\"");
+const example_str = try vm.evalStr([]const u8, allocator, "\"test\"");
+defer allocater.free(example_str);
 
-	// Can make use of example_val and example_str over here.
-	...
+// Can make use of example_val and example_str over here.
+...
 
-	const other_val = try vm.evalStr(i64, allocator, "10");
-	// example_val is now invalid as evalStr may have run the garbage collector.
-	// example_str is ok as it was allocated with allocator.
+const other_val = try vm.evalStr(i64, allocator, "10");
+// example_val is now invalid as evalStr may have run the garbage collector.
+// example_str is ok as it was allocated with allocator.
 ```
 
-To extend the lifetime of the value, call `Environment.keepAlive` to keep the
-value alive and `Environment.allowDeath` to allow the garbage collector to clean
+To extend the lifetime of the value, call `Vm.keepAlive` to keep the
+value alive and `Vm.allowDeath` to allow the garbage collector to clean
 it up.
 
 ```zig
-	const example_val = try vm.evalStr(Val, allocator, "\"test\"");
-	try vm.env.keepAlive(example_val);
-	defer vm.env.allowDeath(example_val);
-	const example_str = try vm.evalStr([]const u8, allocator, "\"test\"");
-	defer allocater.free(example_str);
+const example_val = try vm.evalStr(Val, allocator, "\"test\"");
+try vm.keepAlive(example_val);
+defer vm.allowDeath(example_val);
+const example_str = try vm.evalStr([]const u8, allocator, "\"test\"");
+defer allocater.free(example_str);
 
-	// Can make use of example_val and example_str over here.
-	...
+// Can make use of example_val and example_str over here.
+...
 
-	const other_val = try vm.evalStr(i64, allocator, "10");
-	// Can make use of example_val as keepAlive ensures it is not garbage collected.
-	// example_str is ok as it was allocated with allocator.
+const other_val = try vm.evalStr(i64, allocator, "10");
+// Can make use of example_val as keepAlive ensures it is not garbage collected.
+// example_str is ok as it was allocated with allocator.
 ```
 
 
@@ -195,8 +196,8 @@ invoked within the VM.
 
 
 ```zig
-fn beep(env: *Vm.Environment, args: []const Vm.Val) Vm.NativeFnError!Vm.Val {
-	...
+fn beep(vm: *fizz.Vm, args: []const fizz.Val) fizz.NativeFnError!fizz.Val {
+    ...
 }
 
 try vm.registerGlobalFn("beep!", beep)
@@ -210,11 +211,13 @@ For some examples, see
 
 All values in Fizz are represented by `fizz.Val`. Some may be trivially
 constructed, however, types that require extra memory must be allocated with a
-`fizz.Environment`.
+`fizz.Vm`.
 
+- `none` - `.none`
+- `bool` - `.{.boolean = true}`
 - `int` - `.{.int = 1}`
 - `float` - `.{float = 1.0}`
-- `string` - `try env.memory_manager.allocateStringVal("my-string")`
-- `list` - `try env.memory_manager.allocateListOfNone(4)`
+- `string` - `try vm.env.memory_manager.allocateStringVal("my-string")`
+- `list` - `try vm.env.memory_manager.allocateListOfNone(4)`
 - `struct` - Not yet supported.
 - `function` - TODO: Add documentation.

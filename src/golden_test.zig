@@ -68,13 +68,14 @@ test "golden test" {
         \\
     ;
     try std.testing.expectEqualStrings(expected, actual);
+    try std.testing.expect(vm.env.runtime_stats.gc_duration_nanos > 0);
 }
 
 fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *fizz.Vm, expr_number: *usize, ast: *const fizz.Ast.Node) !void {
     var compiler = try fizz.Compiler.initModule(
         allocator,
         &vm.env,
-        try vm.env.getOrCreateModule(.{}),
+        try vm.getOrCreateModule(.{}),
     );
     defer compiler.deinit();
     const ir = try fizz.Ir.init(allocator, &vm.env.errors, &[1]fizz.Ast.Node{ast.*});
@@ -85,5 +86,4 @@ fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *fizz.Vm, expr_numb
         try writer.print("${d}: {any}\n", .{ expr_number.*, res });
         expr_number.* += 1;
     }
-    try vm.env.runGc();
 }

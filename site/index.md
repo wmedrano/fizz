@@ -36,7 +36,7 @@ Zig**.
    ```zig
    const fizz = @import("fizz");
 
-	...
+	   ...
 	   var vm = try fizz.Vm.init(allocator);
 	   defer vm.deinit();
 	   errdefer std.debug.print("Fizz VM failed:\n{any}\n", .{vm.env.errors});
@@ -49,11 +49,11 @@ Zig**.
    ```
 1. Call custom Zig functions.
    ```zig
-   fn quack(env: *fizz.Environment, _: []const fizz.Val) fizz.NativeFnError!fizz.Val {
-	   return env.memory_manager.allocateStringVal("quack!");
+   fn quack(vm: *fizz.Vm, _: []const fizz.Val) fizz.NativeFnError!fizz.Val {
+	   return vm.env.memory_manager.allocateStringVal("quack!") catch return fizz.NativnFnError.RuntimeError;
    }
 
-    ...
+       ...
        try vm.registerGlobalFn("quack!", quack);
        const text = try vm.evalStr([]u8, allocator, "(quack!)");
        defer allocator.free(text);
