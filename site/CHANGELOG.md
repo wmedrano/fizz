@@ -20,7 +20,7 @@ following tradeoffs may happen:
 
 ## Releases
 
-### 0.2.0 (In Progress)
+### 0.2.0 (Current)
 
 **Zig API**
 
@@ -35,7 +35,7 @@ following tradeoffs may happen:
 
 - Allow define within subexpressions.
 
-### 0.1.1 (Current)
+### 0.1.1
 
 - Add `map` and `filter` functions.
 
