@@ -3,7 +3,8 @@ const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
 const Compiler = @This();
-const Environment = @import("Environment.zig");
+const Env = @import("Env.zig");
+const Vm = @import("Vm.zig");
 const Module = @import("Module.zig");
 const ScopeManager = @import("datastructures/ScopeManager.zig");
 
@@ -12,8 +13,8 @@ const Allocator = std.mem.Allocator;
 
 const Error = std.mem.Allocator.Error || error{ CompilerBug, BadSyntax };
 
-/// The virtual machine to compile for.
-env: *Environment,
+/// The environment for the virtual machine to compile for.
+env: *Env,
 
 /// Manage variable scopes.
 scopes: ScopeManager,
@@ -28,7 +29,7 @@ is_module: bool = false,
 module_defined_vals: std.StringHashMap(void),
 
 /// Initialize a compiler for a function that lives inside `module`.
-pub fn initFunction(allocator: std.mem.Allocator, env: *Environment, module: *Module, args: []const []const u8) !Compiler {
+pub fn initFunction(allocator: std.mem.Allocator, env: *Env, module: *Module, args: []const []const u8) !Compiler {
     var module_defined_vals = std.StringHashMap(void).init(allocator);
     var module_definitions = module.values.keyIterator();
     while (module_definitions.next()) |def| try module_defined_vals.put(def.*, {});
@@ -43,7 +44,7 @@ pub fn initFunction(allocator: std.mem.Allocator, env: *Environment, module: *Mo
 }
 
 /// Initialize a compiler for a module definition.
-pub fn initModule(allocator: std.mem.Allocator, env: *Environment, module: *Module) !Compiler {
+pub fn initModule(allocator: std.mem.Allocator, env: *Env, module: *Module) !Compiler {
     var module_defined_vals = std.StringHashMap(void).init(allocator);
     var module_definitions = module.values.keyIterator();
     while (module_definitions.next()) |def| try module_defined_vals.put(def.*, {});
@@ -70,7 +71,7 @@ pub fn compile(self: *Compiler, ir: *const Ir) !Val {
     }
     const bc = try self.compileImpl(&irs);
     if (bc.instructions.items.len == 0 or bc.instructions.items[bc.instructions.items.len - 1].tag() != .ret) {
-        try bc.instructions.append(self.env.allocator(), .ret);
+        try bc.instructions.append(self.env.memory_manager.allocator, .ret);
     }
     return .{ .bytecode = bc };
 }
@@ -118,7 +119,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
     switch (ir.*) {
         .constant => |c| {
             try bc.instructions.append(
-                self.env.allocator(),
+                self.env.memory_manager.allocator,
                 .{ .push_const = try c.toVal(&self.env.memory_manager) },
             );
         },
@@ -128,14 +129,14 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
                 const symbol_val = try self.env.memory_manager.allocateSymbolVal(def.name);
                 try self.addIr(bc, def.expr);
                 try bc.instructions.append(
-                    self.env.allocator(),
+                    self.env.memory_manager.allocator,
                     .{ .define = symbol_val },
                 );
             } else {
                 const local_idx = try self.scopes.addVariable(def.name);
                 try self.addIr(bc, def.expr);
                 try bc.instructions.append(
-                    self.env.allocator(),
+                    self.env.memory_manager.allocator,
                     .{ .move = local_idx },
                 );
             }
@@ -145,20 +146,20 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
                 return Error.BadSyntax;
             }
             try bc.instructions.append(
-                self.env.allocator(),
-                .{ .import_module = try self.env.allocator().dupe(u8, m.path) },
+                self.env.memory_manager.allocator,
+                .{ .import_module = try self.env.memory_manager.allocator.dupe(u8, m.path) },
             );
         },
         .deref => |s| {
             if (self.scopes.variableIdx(s)) |var_idx| {
-                try bc.instructions.append(self.env.allocator(), .{ .get_arg = var_idx });
+                try bc.instructions.append(self.env.memory_manager.allocator, .{ .get_arg = var_idx });
             } else {
-                const sym = try self.env.allocator().dupe(u8, s);
+                const sym = try self.env.memory_manager.allocator.dupe(u8, s);
                 const parsed_sym = Module.parseModuleAndSymbol(sym);
                 if (self.module_defined_vals.contains(s) or parsed_sym.module_alias != null) {
-                    try bc.instructions.append(self.env.allocator(), .{ .deref_local = sym });
+                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_local = sym });
                 } else {
-                    try bc.instructions.append(self.env.allocator(), .{ .deref_global = sym });
+                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_global = sym });
                 }
             }
         },
@@ -171,7 +172,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
                 try self.addIr(bc, arg);
             }
             try bc.instructions.append(
-                self.env.allocator(),
+                self.env.memory_manager.allocator,
                 .{ .eval = eval_count },
             );
         },
@@ -192,16 +193,16 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
                 try self.compileImpl(&[_]*const Ir{&Ir{ .constant = .none }});
             self.scopes.retainScopes(scope_count) catch return Error.CompilerBug;
             try bc.instructions.append(
-                self.env.allocator(),
+                self.env.memory_manager.allocator,
                 .{ .jump_if = false_bc.instructions.items.len + 1 },
             );
-            try bc.instructions.appendSlice(self.env.allocator(), false_bc.instructions.items);
+            try bc.instructions.appendSlice(self.env.memory_manager.allocator, false_bc.instructions.items);
             false_bc.instructions.items.len = 0;
             try bc.instructions.append(
-                self.env.allocator(),
+                self.env.memory_manager.allocator,
                 .{ .jump = true_bc.instructions.items.len },
             );
-            try bc.instructions.appendSlice(self.env.allocator(), true_bc.instructions.items);
+            try bc.instructions.appendSlice(self.env.memory_manager.allocator, true_bc.instructions.items);
             true_bc.instructions.items.len = 0;
         },
         .lambda => |l| {
@@ -210,15 +211,15 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             self.scopes = try ScopeManager.initWithArgs(self.scopes.allocator, l.args);
             defer self.scopes.deinit();
             const lambda_bc = try self.compileImpl(l.exprs);
-            try lambda_bc.instructions.append(self.env.allocator(), .ret);
+            try lambda_bc.instructions.append(self.env.memory_manager.allocator, .ret);
             try bc.instructions.append(
-                self.env.allocator(),
+                self.env.memory_manager.allocator,
                 .{ .push_const = .{ .bytecode = lambda_bc } },
             );
         },
         .ret => |r| {
             for (r.exprs) |e| try self.addIr(bc, e);
-            try bc.instructions.append(self.env.allocator(), .ret);
+            try bc.instructions.append(self.env.memory_manager.allocator, .ret);
         },
     }
 }
@@ -231,9 +232,9 @@ test "if expression" {
             .false_expr = @constCast(&Ir{ .constant = .{ .int = 2 } }),
         },
     };
-    var env = try Environment.init(std.testing.allocator);
-    defer env.deinit();
-    var compiler = try Compiler.initModule(std.testing.allocator, &env, try env.getOrCreateModule(.{}));
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.initModule(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}));
     defer compiler.deinit();
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
@@ -252,7 +253,7 @@ test "if expression" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = env.getModule(Module.Builder.default_name).?,
+            .module = vm.getModule(Module.Builder.default_name).?,
         }),
     }, actual);
 }
@@ -265,9 +266,9 @@ test "if expression without false branch returns none" {
             .false_expr = null,
         },
     };
-    var env = try Environment.init(std.testing.allocator);
-    defer env.deinit();
-    var compiler = try Compiler.initModule(std.testing.allocator, &env, try env.getOrCreateModule(.{}));
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.initModule(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}));
     defer compiler.deinit();
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
@@ -286,7 +287,7 @@ test "if expression without false branch returns none" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = env.getModule(Module.Builder.default_name).?,
+            .module = vm.getModule(Module.Builder.default_name).?,
         }),
     }, actual);
 }
@@ -310,9 +311,9 @@ test "module with define expressions" {
             }),
         },
     };
-    var env = try Environment.init(std.testing.allocator);
-    defer env.deinit();
-    var compiler = try Compiler.initModule(std.testing.allocator, &env, try env.getOrCreateModule(.{}));
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.initModule(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}));
     defer compiler.deinit();
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
@@ -330,7 +331,7 @@ test "module with define expressions" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = env.getModule(Module.Builder.default_name).?,
+            .module = vm.getModule(Module.Builder.default_name).?,
         }),
     }, actual);
 }
@@ -354,9 +355,9 @@ test "define outside of module creates stack local" {
             }),
         },
     };
-    var env = try Environment.init(std.testing.allocator);
-    defer env.deinit();
-    var compiler = try Compiler.initFunction(std.testing.allocator, &env, try env.getOrCreateModule(.{}), &.{});
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var compiler = try Compiler.initFunction(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}), &.{});
     defer compiler.deinit();
 
     const actual = try compiler.compile(&ir);
@@ -375,7 +376,7 @@ test "define outside of module creates stack local" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = env.getModule(Module.Builder.default_name).?,
+            .module = vm.getModule(Module.Builder.default_name).?,
         }),
     }, actual);
 }
@@ -393,9 +394,9 @@ test "define in bad context produces error" {
             .false_expr = null,
         },
     };
-    var vm = try Environment.init(std.testing.allocator);
+    var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = try Compiler.initModule(std.testing.allocator, &vm, try vm.getOrCreateModule(.{}));
+    var compiler = try Compiler.initModule(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}));
     defer compiler.deinit();
     try std.testing.expectError(Error.BadSyntax, compiler.compile(&ir));
 }

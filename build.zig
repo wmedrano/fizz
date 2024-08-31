@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Module: fizz
-    _ = b.addModule("fizz", .{
+    const fizz = b.addModule("fizz", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -20,16 +20,23 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    check_test.root_module.addImport("fizz", fizz);
     const check_step = b.step("check", "Check for compile errors");
     check_step.dependOn(&check_test.step);
 
     // Command: zig build test
-    const exe_unit_tests = b.addTest(.{
+    const golden_test = b.addTest(.{
         .root_source_file = b.path("src/golden_test.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    golden_test.root_module.addImport("fizz", fizz);
+    const unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&b.addRunArtifact(unit_tests).step);
+    test_step.dependOn(&b.addRunArtifact(golden_test).step);
 }

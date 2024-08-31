@@ -1,6 +1,6 @@
 const Module = @This();
 
-const Environment = @import("Environment.zig");
+const Env = @import("Env.zig");
 const Val = @import("val.zig").Val;
 const iter = @import("datastructures/iter.zig");
 const std = @import("std");
@@ -49,9 +49,9 @@ pub fn deinitLocal(self: *Module, allocator: std.mem.Allocator) void {
 }
 
 /// Set a value within the module.
-pub fn setVal(self: *Module, env: *Environment, sym: []const u8, v: Val) !void {
+pub fn setVal(self: *Module, env: *Env, sym: []const u8, v: Val) !void {
     const interned_sym = try env.memory_manager.allocateString(sym);
-    try self.values.put(env.allocator(), interned_sym, v);
+    try self.values.put(env.memory_manager.allocator, interned_sym, v);
 }
 
 /// Get a value within the module.
@@ -150,11 +150,11 @@ pub fn directory(self: *const Module) !std.fs.Dir {
 }
 
 test "can iterate over values" {
-    var vm = try Environment.init(std.testing.allocator);
-    defer vm.deinit();
+    var env = try Env.init(std.testing.allocator);
+    defer env.deinit();
     var module = try Module.init(std.testing.allocator, .{});
-    defer module.deinit(vm.allocator());
-    try module.setVal(&vm, "test-val", .{ .int = 42 });
+    defer module.deinit(env.memory_manager.allocator);
+    try module.setVal(&env, "test-val", .{ .int = 42 });
     var it = module.iterateVals();
     const actual = try iter.toSlice(Val, std.testing.allocator, &it);
     defer std.testing.allocator.free(actual);

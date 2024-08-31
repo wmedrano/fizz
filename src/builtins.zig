@@ -1,10 +1,11 @@
-const Val = @import("val.zig").Val;
-const Environment = @import("Environment.zig");
 const ByteCode = @import("ByteCode.zig");
 const Error = Val.NativeFn.Error;
+const Val = @import("val.zig").Val;
+const Env = @import("Env.zig");
+const Vm = @import("Vm.zig");
 const std = @import("std");
 
-pub fn registerAll(env: *Environment) !void {
+pub fn registerAll(env: *Env) !void {
     try env.global_module.setVal(env, "*modules*", .{ .native_fn = .{ .impl = modules } });
     try env.global_module.setVal(env, "do", .{ .native_fn = .{ .impl = do } });
     try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
@@ -64,40 +65,40 @@ fn equalImpl(a: Val, b: Val) Error!bool {
     }
 }
 
-fn equal(_: *Environment, vals: []const Val) Error!Val {
+fn equal(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
     if (vals[0].tag() != vals[1].tag()) return Error.TypeError;
     return .{ .boolean = try equalImpl(vals[0], vals[1]) };
 }
 
-fn modules(env: *Environment, vals: []const Val) Error!Val {
+fn modules(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 0) return Error.ArrityError;
-    const module_count = 1 + env.modules.count();
-    var ret = env.memory_manager.allocateUninitializedList(module_count) catch return Error.RuntimeError;
-    ret[0] = env.memory_manager.allocateStringVal(env.global_module.name) catch return Error.RuntimeError;
+    const module_count = 1 + vm.env.modules.count();
+    var ret = vm.env.memory_manager.allocateListOfNone(module_count) catch return Error.RuntimeError;
+    ret[0] = vm.env.memory_manager.allocateStringVal(vm.env.global_module.name) catch return Error.RuntimeError;
 
-    var modules_iter = env.modules.keyIterator();
+    var modules_iter = vm.env.modules.keyIterator();
     var idx: usize = 0;
     while (modules_iter.next()) |m| {
         idx += 1;
-        ret[idx] = env.memory_manager.allocateStringVal(m.*) catch return Error.RuntimeError;
+        ret[idx] = vm.env.memory_manager.allocateStringVal(m.*) catch return Error.RuntimeError;
     }
 
     return .{ .list = ret };
 }
 
-fn do(_: *Environment, vals: []const Val) Error!Val {
+fn do(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len == 0) return .none;
     return vals[vals.len - 1];
 }
 
-fn apply(env: *Environment, vals: []const Val) Error!Val {
+fn apply(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
     const args = switch (vals[1]) {
         .list => |lst| lst,
         else => return Error.TypeError,
     };
-    const res = env.evalNoReset(vals[0], args) catch |err| switch (err) {
+    const res = vm.evalNoReset(vals[0], args) catch |err| switch (err) {
         Error.ArrityError => return Error.ArrityError,
         Error.RuntimeError => return Error.RuntimeError,
         Error.TypeError => return Error.TypeError,
@@ -142,15 +143,15 @@ fn toStringImpl(buff: *std.ArrayList(u8), val: Val) !void {
     }
 }
 
-fn toStr(env: *Environment, vals: []const Val) Error!Val {
+fn toStr(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
-    var buff = std.ArrayList(u8).init(env.allocator());
+    var buff = std.ArrayList(u8).init(vm.valAllocator());
     defer buff.deinit();
     toStringImpl(&buff, vals[0]) catch return Error.RuntimeError;
-    return env.memory_manager.allocateStringVal(buff.items) catch return Error.RuntimeError;
+    return vm.env.memory_manager.allocateStringVal(buff.items) catch return Error.RuntimeError;
 }
 
-fn strLen(_: *Environment, vals: []const Val) Error!Val {
+fn strLen(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .string => |s| return Val{ .int = @intCast(s.len) },
@@ -158,9 +159,9 @@ fn strLen(_: *Environment, vals: []const Val) Error!Val {
     }
 }
 
-fn strConcat(env: *Environment, vals: []const Val) Error!Val {
+fn strConcat(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
-    var buff = std.ArrayList(u8).init(env.allocator());
+    var buff = std.ArrayList(u8).init(vm.valAllocator());
     defer buff.deinit();
     switch (vals[0]) {
         .list => |lst| {
@@ -173,11 +174,11 @@ fn strConcat(env: *Environment, vals: []const Val) Error!Val {
         },
         else => return Error.TypeError,
     }
-    const v = env.memory_manager.allocateStringVal(buff.items) catch return Error.RuntimeError;
+    const v = vm.env.memory_manager.allocateStringVal(buff.items) catch return Error.RuntimeError;
     return v;
 }
 
-fn strSubstr(env: *Environment, vals: []const Val) Error!Val {
+fn strSubstr(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 3) return Error.ArrityError;
     const str = switch (vals[0]) {
         .string => |s| s,
@@ -194,13 +195,13 @@ fn strSubstr(env: *Environment, vals: []const Val) Error!Val {
     };
     if (end < start or end > str.len) return Error.RuntimeError;
     if (start == str.len and start != end) return Error.RuntimeError;
-    if (start == end) return env.memory_manager.allocateStringVal("") catch return Error.RuntimeError;
+    if (start == end) return vm.env.memory_manager.allocateStringVal("") catch return Error.RuntimeError;
     const substr = str[@intCast(start)..@intCast(end)];
-    const v = env.memory_manager.allocateStringVal(substr) catch return Error.RuntimeError;
+    const v = vm.env.memory_manager.allocateStringVal(substr) catch return Error.RuntimeError;
     return v;
 }
 
-fn makeStruct(env: *Environment, vals: []const Val) Error!Val {
+fn makeStruct(vm: *Vm, vals: []const Val) Error!Val {
     const field_count = vals.len / 2;
     if (field_count * 2 != vals.len) return Error.ArrityError;
     for (0..field_count) |idx| {
@@ -209,16 +210,16 @@ fn makeStruct(env: *Environment, vals: []const Val) Error!Val {
             else => return Error.TypeError,
         }
     }
-    const fields = env.memory_manager.allocateStruct() catch return Error.RuntimeError;
-    fields.ensureTotalCapacity(env.allocator(), @intCast(field_count)) catch return Error.RuntimeError;
+    const fields = vm.env.memory_manager.allocateStruct() catch return Error.RuntimeError;
+    fields.ensureTotalCapacity(vm.valAllocator(), @intCast(field_count)) catch return Error.RuntimeError;
     for (0..field_count) |idx| {
         const name_idx = idx * 2;
         const val_idx = name_idx + 1;
         switch (vals[name_idx]) {
             .symbol => |s| {
-                const k = env.allocator().dupe(u8, s) catch return Error.RuntimeError;
-                errdefer env.allocator().free(k);
-                fields.put(env.allocator(), k, vals[val_idx]) catch return Error.RuntimeError;
+                const k = vm.valAllocator().dupe(u8, s) catch return Error.RuntimeError;
+                errdefer vm.valAllocator().free(k);
+                fields.put(vm.valAllocator(), k, vals[val_idx]) catch return Error.RuntimeError;
             },
             else => unreachable,
         }
@@ -226,7 +227,7 @@ fn makeStruct(env: *Environment, vals: []const Val) Error!Val {
     return .{ .structV = fields };
 }
 
-fn structSet(env: *Environment, vals: []const Val) Error!Val {
+fn structSet(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 3) return Error.ArrityError;
     const struct_map = switch (vals[0]) {
         .structV => |m| m,
@@ -237,16 +238,16 @@ fn structSet(env: *Environment, vals: []const Val) Error!Val {
         else => return Error.TypeError,
     };
     if (struct_map.getKey(sym)) |k| {
-        struct_map.put(env.allocator(), k, vals[2]) catch return Error.RuntimeError;
+        struct_map.put(vm.valAllocator(), k, vals[2]) catch return Error.RuntimeError;
         return .none;
     }
-    const sym_key = env.allocator().dupe(u8, sym) catch return Error.RuntimeError;
-    errdefer env.allocator().free(sym_key);
-    struct_map.put(env.allocator(), sym_key, vals[2]) catch return Error.RuntimeError;
+    const sym_key = vm.valAllocator().dupe(u8, sym) catch return Error.RuntimeError;
+    errdefer vm.valAllocator().free(sym_key);
+    struct_map.put(vm.valAllocator(), sym_key, vals[2]) catch return Error.RuntimeError;
     return .none;
 }
 
-fn structGet(_: *Environment, vals: []const Val) Error!Val {
+fn structGet(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
     const struct_map = switch (vals[0]) {
         .structV => |m| m,
@@ -260,11 +261,11 @@ fn structGet(_: *Environment, vals: []const Val) Error!Val {
     return v;
 }
 
-fn list(env: *Environment, vals: []const Val) Error!Val {
-    return env.memory_manager.allocateListVal(vals) catch return Error.RuntimeError;
+fn list(vm: *Vm, vals: []const Val) Error!Val {
+    return vm.env.memory_manager.allocateListVal(vals) catch return Error.RuntimeError;
 }
 
-fn listPred(_: *Environment, vals: []const Val) Error!Val {
+fn listPred(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => return .{ .boolean = true },
@@ -272,7 +273,7 @@ fn listPred(_: *Environment, vals: []const Val) Error!Val {
     }
 }
 
-fn first(_: *Environment, vals: []const Val) Error!Val {
+fn first(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => |lst| return lst[0],
@@ -280,18 +281,18 @@ fn first(_: *Environment, vals: []const Val) Error!Val {
     }
 }
 
-fn rest(env: *Environment, vals: []const Val) Error!Val {
+fn rest(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => |lst| {
             if (lst.len == 0) return Error.RuntimeError;
-            return env.memory_manager.allocateListVal(lst[1..]) catch return Error.RuntimeError;
+            return vm.env.memory_manager.allocateListVal(lst[1..]) catch return Error.RuntimeError;
         },
         else => return Error.TypeError,
     }
 }
 
-fn nth(_: *Environment, vals: []const Val) Error!Val {
+fn nth(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
     const lst = switch (vals[0]) {
         .list => |lst| lst,
@@ -304,7 +305,7 @@ fn nth(_: *Environment, vals: []const Val) Error!Val {
     if (idx < lst.len) return lst[@intCast(idx)] else return Error.RuntimeError;
 }
 
-fn map(env: *Environment, vals: []const Val) Error!Val {
+fn map(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
     const func = switch (vals[0]) {
         .native_fn => vals[0],
@@ -315,14 +316,16 @@ fn map(env: *Environment, vals: []const Val) Error!Val {
         .list => |lst| lst,
         else => return Error.TypeError,
     };
-    const ret = env.memory_manager.allocateUninitializedList(input_list.len) catch return Error.RuntimeError;
+    const ret = vm.env.memory_manager.allocateListOfNone(input_list.len) catch return Error.RuntimeError;
+    vm.keepAlive(.{ .list = ret }) catch return Error.RuntimeError;
+    defer vm.allowDeath(.{ .list = ret });
     for (input_list, 0..input_list.len) |input, idx| {
-        ret[idx] = env.evalNoReset(func, &[1]Val{input}) catch return Error.RuntimeError;
+        ret[idx] = vm.evalNoReset(func, &[1]Val{input}) catch return Error.RuntimeError;
     }
     return .{ .list = ret };
 }
 
-fn filter(env: *Environment, vals: []const Val) Error!Val {
+fn filter(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
     const func = switch (vals[0]) {
         .native_fn => vals[0],
@@ -334,20 +337,20 @@ fn filter(env: *Environment, vals: []const Val) Error!Val {
         else => return Error.TypeError,
     };
 
-    var keep_values = std.ArrayList(Val).initCapacity(env.allocator(), input_list.len) catch return Error.RuntimeError;
+    var keep_values = std.ArrayList(Val).initCapacity(vm.valAllocator(), input_list.len) catch return Error.RuntimeError;
     defer keep_values.deinit();
     for (input_list) |input| {
-        const keep = env.evalNoReset(func, &[1]Val{input}) catch return Error.RuntimeError;
-        if (env.toZig(bool, env.allocator(), keep) catch return Error.RuntimeError) {
+        const keep = vm.evalNoReset(func, &[1]Val{input}) catch return Error.RuntimeError;
+        if (vm.toZig(bool, vm.valAllocator(), keep) catch return Error.RuntimeError) {
             keep_values.append(input) catch return Error.RuntimeError;
         }
     }
 
-    const ret = env.memory_manager.allocateListVal(keep_values.items) catch return Error.RuntimeError;
+    const ret = vm.env.memory_manager.allocateListVal(keep_values.items) catch return Error.RuntimeError;
     return ret;
 }
 
-fn len(_: *Environment, vals: []const Val) Error!Val {
+fn len(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
     switch (vals[0]) {
         .list => |lst| return .{ .int = @intCast(lst.len) },
@@ -355,7 +358,7 @@ fn len(_: *Environment, vals: []const Val) Error!Val {
     }
 }
 
-fn add(_: *Environment, vals: []const Val) Error!Val {
+fn add(_: *Vm, vals: []const Val) Error!Val {
     var int_sum: i64 = 0;
     var float_sum: f64 = 0.0;
     var has_float = false;
@@ -383,18 +386,18 @@ fn negate(v: Val) Error!Val {
     }
 }
 
-fn subtract(env: *Environment, vals: []const Val) Error!Val {
+fn subtract(vm: *Vm, vals: []const Val) Error!Val {
     switch (vals.len) {
         0 => return error.ArrityError,
         1 => return try negate(vals[0]),
         else => {
-            const neg = try negate(try add(env, vals[1..]));
-            return try add(env, &[2]Val{ vals[0], neg });
+            const neg = try negate(try add(vm, vals[1..]));
+            return try add(vm, &[2]Val{ vals[0], neg });
         },
     }
 }
 
-fn multiply(_: *Environment, vals: []const Val) Error!Val {
+fn multiply(_: *Vm, vals: []const Val) Error!Val {
     var int_product: i64 = 1;
     var float_product: f64 = 1.0;
     var has_float = false;
@@ -422,13 +425,13 @@ fn reciprocal(v: Val) Error!Val {
     }
 }
 
-fn divide(env: *Environment, vals: []const Val) Error!Val {
+fn divide(vm: *Vm, vals: []const Val) Error!Val {
     switch (vals.len) {
         0 => return error.ArrityError,
         1 => return try reciprocal(vals[0]),
         else => {
-            const divisor = try multiply(env, vals[1..]);
-            return try multiply(env, &[2]Val{
+            const divisor = try multiply(vm, vals[1..]);
+            return try multiply(vm, &[2]Val{
                 vals[0],
                 try reciprocal(divisor),
             });
@@ -457,7 +460,7 @@ fn numbersAreOrdered(vals: []const Val, comptime pred: fn (a: anytype, b: anytyp
     return true;
 }
 
-fn less(_: *Environment, vals: []const Val) Error!Val {
+fn less(_: *Vm, vals: []const Val) Error!Val {
     const impl = struct {
         fn pred(a: anytype, b: anytype) bool {
             return a < b;
@@ -466,7 +469,7 @@ fn less(_: *Environment, vals: []const Val) Error!Val {
     return .{ .boolean = try numbersAreOrdered(vals, impl.pred) };
 }
 
-fn lessEq(_: *Environment, vals: []const Val) Error!Val {
+fn lessEq(_: *Vm, vals: []const Val) Error!Val {
     const impl = struct {
         fn pred(a: anytype, b: anytype) bool {
             return a <= b;
@@ -475,7 +478,7 @@ fn lessEq(_: *Environment, vals: []const Val) Error!Val {
     return .{ .boolean = try numbersAreOrdered(vals, impl.pred) };
 }
 
-fn greater(_: *Environment, vals: []const Val) Error!Val {
+fn greater(_: *Vm, vals: []const Val) Error!Val {
     const impl = struct {
         fn pred(a: anytype, b: anytype) bool {
             return a > b;
@@ -484,7 +487,7 @@ fn greater(_: *Environment, vals: []const Val) Error!Val {
     return .{ .boolean = try numbersAreOrdered(vals, impl.pred) };
 }
 
-fn greaterEq(_: *Environment, vals: []const Val) Error!Val {
+fn greaterEq(_: *Vm, vals: []const Val) Error!Val {
     const impl = struct {
         fn pred(a: anytype, b: anytype) bool {
             return a >= b;
@@ -494,7 +497,7 @@ fn greaterEq(_: *Environment, vals: []const Val) Error!Val {
 }
 
 test "register_all does not fail" {
-    var env = try Environment.init(std.testing.allocator);
-    try registerAll(&env);
-    defer env.deinit();
+    var vm = try Vm.init(std.testing.allocator);
+    try registerAll(&vm.env);
+    defer vm.deinit();
 }
