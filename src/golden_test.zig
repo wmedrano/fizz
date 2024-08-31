@@ -50,12 +50,12 @@ test "golden test" {
         \\$25: (1 2)
         \\$26: "------------------------------------------------------------"
         \\$27: "test structs"
-        \\$28: (struct 'id 0 'hello "world")
-        \\$29: (struct 'id 100 'hello "world")
+        \\$28: (struct 'hello "world" 'id 0)
+        \\$29: (struct 'hello "world" 'id 100)
         \\$30: "world"
         \\$31: "------------------------------------------------------------"
         \\$32: "test fib"
-        \\$33: <function >
+        \\$33: <function _>
         \\$34: 75025
         \\$35: "------------------------------------------------------------"
         \\$36: "test equal"
@@ -83,7 +83,7 @@ fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *fizz.Vm, expr_numb
     const bytecode = try compiler.compile(ir);
     const res = try vm.evalFuncVal(bytecode, &.{});
     if (res.tag() != .none) {
-        try writer.print("${d}: {any}\n", .{ expr_number.*, res });
+        try writer.print("${d}: {any}\n", .{ expr_number.*, res.formatter(vm) });
         expr_number.* += 1;
     }
 }

@@ -56,7 +56,7 @@ const ByteCodeValuesIter = struct {
                 .deref_local => {},
                 .deref_global => {},
                 .get_arg => {},
-                .define => |v| return v,
+                .define => {},
                 .move => {},
                 .eval => {},
                 .jump => {},
@@ -87,7 +87,7 @@ pub const Instruction = union(enum) {
     /// Get the nth value (0-based index) from the base of the current function call stack.
     get_arg: usize,
     /// Define a symbol on the current module.
-    define: Val,
+    define: usize,
     /// Move the top value of the stack into the given index.
     move: usize,
     /// Evaluate the top n elements of the stack. The deepmost value should be a function.
@@ -131,7 +131,7 @@ pub const Instruction = union(enum) {
             .jump_if => |n| try writer.print("jump_if({d})", .{n}),
             .import_module => |m| try writer.print("import({s})", .{m}),
             .ret => try writer.print("ret()", .{}),
-            .define => |sym| try writer.print("define({s})", .{sym}),
+            .define => |sym| try writer.print("define({d})", .{sym}),
         }
     }
 };

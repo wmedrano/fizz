@@ -99,10 +99,13 @@ pub const Ir = union(enum) {
     }
 
     /// Populate define_set with all symbols that are defined.
-    pub fn populateDefinedVals(self: *const Ir, defined_vals: *std.StringHashMap(void)) !void {
+    pub fn populateDefinedVals(self: *const Ir, defined_vals: *std.StringHashMap(usize), memory_manager: *MemoryManager) !void {
         switch (self.*) {
-            .define => |def| try defined_vals.put(def.name, {}),
-            .ret => |r| for (r.exprs) |e| try e.populateDefinedVals(defined_vals),
+            .define => |def| {
+                const sym_id = try memory_manager.allocateSymbol(def.name);
+                try defined_vals.put(def.name, sym_id);
+            },
+            .ret => |r| for (r.exprs) |e| try e.populateDefinedVals(defined_vals, memory_manager),
             else => {},
         }
     }
@@ -665,6 +668,8 @@ test "nested badly formed lambda produces error" {
 }
 
 test "definedVals visits all defined values" {
+    var memory_manager = MemoryManager.init(std.testing.allocator);
+    defer memory_manager.deinit();
     var errors = ErrorCollector.init(std.testing.allocator);
     defer errors.deinit();
     const ir = &Ir{
@@ -689,9 +694,9 @@ test "definedVals visits all defined values" {
             }),
         },
     };
-    var actual = std.StringHashMap(void).init(std.testing.allocator);
+    var actual = std.StringHashMap(usize).init(std.testing.allocator);
     defer actual.deinit();
-    try ir.populateDefinedVals(&actual);
+    try ir.populateDefinedVals(&actual, &memory_manager);
     try std.testing.expectEqual(2, actual.count());
     try std.testing.expect(actual.contains("foo"));
     try std.testing.expect(actual.contains("bar"));

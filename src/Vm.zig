@@ -73,7 +73,7 @@ pub fn valAllocator(self: *const Vm) std.mem.Allocator {
 /// T - The type to convert to.
 /// alloc - Allocator used to create strings and slices.
 /// val - The value to convert from.
-pub fn toZig(self: *const Vm, T: type, alloc: std.mem.Allocator, val: Val) !T {
+pub fn toZig(self: *Vm, T: type, alloc: std.mem.Allocator, val: Val) !T {
     if (T == Val) return val;
     if (T == void) {
         if (!val.isNone()) return error.TypeError;
@@ -126,11 +126,21 @@ pub fn toZig(self: *const Vm, T: type, alloc: std.mem.Allocator, val: Val) !T {
                 var fizz_field_name: [field.name.len]u8 = undefined;
                 @memcpy(&fizz_field_name, field.name);
                 makeKebabCase(&fizz_field_name);
-                const field_val = map.get(&fizz_field_name) orelse
+                if (self.env.memory_manager.symbol_to_id.get(&fizz_field_name)) |sym_id| {
+                    const field_val = map.get(sym_id) orelse
+                        return Error.TypeError;
+                    const field_zig_val = try self.toZig(field.type, alloc, field_val);
+                    errdefer toZigClean(field.type, alloc, field_zig_val, null);
+                    @field(ret, field.name) = field_zig_val;
+                } else {
+                    const msg: []const u8 = std.fmt.allocPrint(
+                        self.env.errors.allocator(),
+                        "field {s} not found in Fizz struct",
+                        .{fizz_field_name},
+                    ) catch return Error.OutOfMemory;
+                    try self.env.errors.addErrorOwned(.{ .msg = msg });
                     return Error.TypeError;
-                const field_zig_val = try self.toZig(field.type, alloc, field_val);
-                errdefer toZigClean(field.type, alloc, field_zig_val, null);
-                @field(ret, field.name) = field_zig_val;
+                }
             }
             return ret;
         },
@@ -224,7 +234,6 @@ pub fn keepAlive(self: *Vm, val: Val) !void {
     const mm = &self.env.memory_manager;
     switch (val) {
         .string => |s| try self.refIncr(&mm.keep_alive_strings, s),
-        .symbol => |s| try self.refIncr(&mm.keep_alive_strings, s),
         .list => |lst| try self.refIncr(&mm.keep_alive_lists, lst.ptr),
         .structV => |strct| try self.refIncr(&mm.keep_alive_structs, strct),
         .bytecode => |bc| try self.refIncr(&mm.keep_alive_bytecode, bc),
@@ -241,7 +250,6 @@ pub fn allowDeath(self: *Vm, val: Val) void {
     const mm = &self.env.memory_manager;
     switch (val) {
         .string => |s| try self.refDecr(&mm.keep_alive_strings, s),
-        .symbol => |s| try self.refDecr(&mm.keep_alive_strings, s),
         .list => |lst| try self.refDecr(&mm.keep_alive_lists, lst.ptr),
         .structV => |strct| try self.refDecr(&mm.keep_alive_structs, strct),
         .bytecode => |bc| try self.refDecr(&mm.keep_alive_bytecode, bc),
@@ -381,7 +389,7 @@ fn runNext(self: *Vm) Error!bool {
         .jump_if => |n| if (try self.env.stack.pop().asBool()) {
             frame.instruction += n;
         },
-        .define => |symbol| try self.executeDefine(frame.bytecode.module, symbol.symbol),
+        .define => |symbol| try self.executeDefine(frame.bytecode.module, symbol),
         .import_module => |path| try self.executeImportModule(frame.bytecode.module, path),
     }
     frame.instruction += 1;
@@ -393,7 +401,7 @@ fn executePushConst(self: *Vm, v: Val) !void {
 }
 
 fn executeDeref(self: *Vm, module: *const Module, sym: []const u8) Error!void {
-    const v = module.getVal(sym) orelse {
+    const v = module.getVal(&self.env.memory_manager, sym) orelse {
         const msg = try std.fmt.allocPrint(
             self.env.errors.allocator(),
             "Symbol {s} not found in module {s}",
@@ -474,9 +482,9 @@ fn executeRet(self: *Vm) !bool {
     return true;
 }
 
-fn executeDefine(self: *Vm, module: *Module, symbol: []const u8) Error!void {
+fn executeDefine(self: *Vm, module: *Module, symbol_id: usize) Error!void {
     const val = self.env.stack.pop();
-    try module.setVal(&self.env, symbol, val);
+    try module.setValBySymbolId(&self.env, symbol_id, val);
 }
 
 fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Error!void {
@@ -533,28 +541,28 @@ fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Erro
 }
 
 test "can convert to zig val" {
-    var env = try init(std.testing.allocator);
-    defer env.deinit();
+    var vm = try init(std.testing.allocator);
+    defer vm.deinit();
 
-    try std.testing.expectEqual(false, env.toZig(bool, std.testing.allocator, .{ .boolean = false }));
-    try std.testing.expectEqual(42, env.toZig(i64, std.testing.allocator, .{ .int = 42 }));
-    try env.toZig(void, std.testing.allocator, .none);
+    try std.testing.expectEqual(false, vm.toZig(bool, std.testing.allocator, .{ .boolean = false }));
+    try std.testing.expectEqual(42, vm.toZig(i64, std.testing.allocator, .{ .int = 42 }));
+    try vm.toZig(void, std.testing.allocator, .none);
 }
 
 test "can convert to zig string" {
-    var env = try init(std.testing.allocator);
-    defer env.deinit();
+    var vm = try init(std.testing.allocator);
+    defer vm.deinit();
 
-    const actual_str = try env.toZig([]const u8, std.testing.allocator, .{ .string = "string" });
+    const actual_str = try vm.toZig([]const u8, std.testing.allocator, .{ .string = "string" });
     defer std.testing.allocator.free(actual_str);
     try std.testing.expectEqualStrings("string", actual_str);
 }
 
 test "can convert to zig slice" {
-    var env = try init(std.testing.allocator);
-    defer env.deinit();
+    var vm = try init(std.testing.allocator);
+    defer vm.deinit();
 
-    const actual_int_list = try env.toZig(
+    const actual_int_list = try vm.toZig(
         []i64,
         std.testing.allocator,
         Val{ .list = @constCast(&[_]Val{ Val{ .int = 1 }, Val{ .int = 2 } }) },
@@ -562,7 +570,7 @@ test "can convert to zig slice" {
     defer std.testing.allocator.free(actual_int_list);
     try std.testing.expectEqualDeep(&[_]i64{ 1, 2 }, actual_int_list);
 
-    const actual_float_list_list = try env.toZig(
+    const actual_float_list_list = try vm.toZig(
         [][]f64,
         std.testing.allocator,
         Val{ .list = @constCast(
@@ -584,17 +592,17 @@ test "can convert to zig slice" {
 }
 
 test "can't convert list of heterogenous types" {
-    var env = try init(std.testing.allocator);
-    defer env.deinit();
+    var vm = try init(std.testing.allocator);
+    defer vm.deinit();
     try std.testing.expectError(
         error.TypeError,
-        env.toZig(
+        vm.toZig(
             [][]u8,
             std.testing.allocator,
             Val{ .list = @constCast(
                 &[_]Val{
                     Val{ .list = @constCast(&[_]Val{ .{ .string = "good" }, .{ .string = "also good" } }) },
-                    Val{ .list = @constCast(&[_]Val{ .{ .string = "still good" }, .{ .symbol = "bad" } }) },
+                    Val{ .list = @constCast(&[_]Val{ .{ .string = "still good" }, .{ .symbol = 0 } }) },
                 },
             ) },
         ),

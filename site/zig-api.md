@@ -173,7 +173,9 @@ const other_val = try vm.evalStr(i64, allocator, "10");
 ```
 
 
-## Errors
+## Debugging
+
+### Errors
 
 Fizz uses the standard Zig error mechanism, but also stores error logs under
 `vm.env.errors`. The current errors can be printed by:
@@ -182,6 +184,19 @@ Fizz uses the standard Zig error mechanism, but also stores error logs under
 fn printErrors(vm: *fizz.Vm) void {
     std.debug.print("VM Errors: {any}\n", .{vm.env.errors});
 }
+```
+
+### Printing Values
+
+Fizz values may contain identifiers that are internal to the Vm. To properly
+format a `fizz.Val`, call `fizz.Val.formatter` to provide a Vm.
+
+```zig
+const val = try vm.evalStr(fizz.Val, allocator, "(struct 'id 0 'name \"Will\")");
+std.debug.print("Formatted value is: {any}", .{val.formatter(null)});
+// (struct 'symbol-#43 0 'symbol-#44 "Will")
+std.debug.print("Better formatted value is: {any}", .{val.formatter(&vm)});
+// (struct 'id 0 'name "Will")
 ```
 
 

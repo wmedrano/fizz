@@ -1,6 +1,7 @@
 const Module = @This();
 
 const Env = @import("Env.zig");
+const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
 const iter = @import("datastructures/iter.zig");
 const std = @import("std");
@@ -9,7 +10,7 @@ const std = @import("std");
 name: []const u8,
 /// The values within the module. The strings and values are managed by a Vm. Only the hashmap
 /// datastructure itself is managed by Module.
-values: std.StringHashMapUnmanaged(Val) = .{},
+values: std.AutoHashMapUnmanaged(usize, Val) = .{},
 /// Map from alias to module that this module has access to.
 alias_to_module: std.StringHashMapUnmanaged(*Module),
 
@@ -50,13 +51,25 @@ pub fn deinitLocal(self: *Module, allocator: std.mem.Allocator) void {
 
 /// Set a value within the module.
 pub fn setVal(self: *Module, env: *Env, sym: []const u8, v: Val) !void {
-    const interned_sym = try env.memory_manager.allocateString(sym);
-    try self.values.put(env.memory_manager.allocator, interned_sym, v);
+    const sym_id = try env.memory_manager.allocateSymbol(sym);
+    try self.setValBySymbolId(env, sym_id, v);
+}
+
+/// Set a value within the module by the symbol id.
+pub fn setValBySymbolId(self: *Module, env: *Env, sym_id: usize, v: Val) !void {
+    try self.values.put(env.memory_manager.allocator, sym_id, v);
 }
 
 /// Get a value within the module.
-pub fn getVal(self: *const Module, sym: []const u8) ?Val {
-    return self.values.get(sym);
+pub fn getVal(self: *const Module, memory_manager: *const MemoryManager, sym: []const u8) ?Val {
+    if (memory_manager.symbolId(sym)) |sym_id|
+        return self.values.get(sym_id);
+    return null;
+}
+
+/// Get a value within the module by its symbol id.
+pub fn getValBySybolId(self: *const Module, sym_id: usize) ?Val {
+    return self.values.get(sym_id);
 }
 
 /// Set a module alias.
@@ -115,31 +128,19 @@ pub fn parseModuleAndSymbol(ident: []const u8) AliasAndSymbol {
 
 /// An iterator over values referenced within the module.
 pub const ValIterator = struct {
-    /// The next (symbol) value that will be returned.
-    next_val: ?[]const u8,
     /// The underlying iterator over values.
-    iterator: std.StringHashMapUnmanaged(Val).Iterator,
+    iterator: std.AutoHashMapUnmanaged(usize, Val).ValueIterator,
 
     /// Get the next referenced value.
     pub fn next(self: *ValIterator) ?Val {
-        if (self.next_val) |v| {
-            self.next_val = null;
-            return .{ .symbol = v };
-        }
-        if (self.iterator.next()) |nxt| {
-            self.next_val = nxt.key_ptr.*;
-            return nxt.value_ptr.*;
-        }
+        if (self.iterator.next()) |v| return v.*;
         return null;
     }
 };
 
 /// Iterate over all referenced values.
 pub fn iterateVals(self: *const Module) ValIterator {
-    return ValIterator{
-        .next_val = null,
-        .iterator = self.values.iterator(),
-    };
+    return .{ .iterator = self.values.valueIterator() };
 }
 
 /// Get the directory for the module or the working directory if it is a virtual module.
@@ -159,7 +160,7 @@ test "can iterate over values" {
     const actual = try iter.toSlice(Val, std.testing.allocator, &it);
     defer std.testing.allocator.free(actual);
     try std.testing.expectEqualDeep(
-        &[_]Val{ .{ .int = 42 }, .{ .symbol = "test-val" } },
+        &[_]Val{.{ .int = 42 }},
         actual,
     );
 }

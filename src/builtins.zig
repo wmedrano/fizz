@@ -1,5 +1,6 @@
 const ByteCode = @import("ByteCode.zig");
 const Error = Val.NativeFn.Error;
+const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
 const Env = @import("Env.zig");
 const Vm = @import("Vm.zig");
@@ -43,7 +44,7 @@ fn equalImpl(a: Val, b: Val) Error!bool {
         .int => |x| return x == b.int,
         .float => |x| return x == b.float,
         .string => |x| return std.mem.eql(u8, x, b.string),
-        .symbol => |x| return std.mem.eql(u8, x, b.symbol),
+        .symbol => |x| return x == b.symbol,
         .list => |x| {
             if (x.len != b.list.len) return true;
             for (x, b.list) |a_item, b_item| {
@@ -107,47 +108,16 @@ fn apply(vm: *Vm, vals: []const Val) Error!Val {
     return res;
 }
 
-fn toStringImpl(buff: *std.ArrayList(u8), val: Val) !void {
-    switch (val) {
-        .none => try buff.appendSlice("none"),
-        .boolean => |b| try buff.appendSlice(if (b) "true" else "false"),
-        .int => |i| try std.fmt.format(buff.writer(), "{d}", .{i}),
-        .float => |f| try std.fmt.format(buff.writer(), "{d}", .{f}),
-        .string => |s| try buff.appendSlice(s),
-        .symbol => |s| try std.fmt.format(buff.writer(), "'{s}", .{s}),
-        .list => |lst| {
-            try buff.appendSlice("(");
-            for (lst, 0..) |v, idx| {
-                if (idx > 0) try buff.appendSlice(" ");
-                try toStringImpl(buff, v);
-            }
-            try buff.appendSlice(")");
-        },
-        .structV => |struct_map| {
-            var iter = struct_map.iterator();
-            try buff.appendSlice("(struct");
-            while (iter.next()) |v| {
-                try buff.appendSlice(" ");
-                try buff.appendSlice(v.key_ptr.*);
-                try buff.appendSlice(" ");
-                try toStringImpl(buff, v.value_ptr.*);
-            }
-            try buff.appendSlice(")");
-        },
-        .bytecode => |bc| try std.fmt.format(
-            buff.writer(),
-            "<function {s}>",
-            .{if (bc.name.len == 0) "_" else bc.name},
-        ),
-        .native_fn => |nf| try std.fmt.format(buff.writer(), "<native-func #{d}>", .{@intFromPtr(nf.impl)}),
-    }
-}
-
 fn toStr(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 1) return Error.ArrityError;
+    switch (vals[0]) {
+        .string => return vals[0],
+        else => {},
+    }
     var buff = std.ArrayList(u8).init(vm.valAllocator());
     defer buff.deinit();
-    toStringImpl(&buff, vals[0]) catch return Error.RuntimeError;
+    const formatter = vals[0].formatter(vm);
+    buff.writer().print("{any}", .{formatter}) catch return Error.RuntimeError;
     return vm.env.memory_manager.allocateStringVal(buff.items) catch return Error.RuntimeError;
 }
 
@@ -216,9 +186,7 @@ fn makeStruct(vm: *Vm, vals: []const Val) Error!Val {
         const name_idx = idx * 2;
         const val_idx = name_idx + 1;
         switch (vals[name_idx]) {
-            .symbol => |s| {
-                const k = vm.valAllocator().dupe(u8, s) catch return Error.RuntimeError;
-                errdefer vm.valAllocator().free(k);
+            .symbol => |k| {
                 fields.put(vm.valAllocator(), k, vals[val_idx]) catch return Error.RuntimeError;
             },
             else => unreachable,
@@ -233,17 +201,15 @@ fn structSet(vm: *Vm, vals: []const Val) Error!Val {
         .structV => |m| m,
         else => return Error.TypeError,
     };
-    const sym = switch (vals[1]) {
+    const sym_id = switch (vals[1]) {
         .symbol => |s| s,
         else => return Error.TypeError,
     };
-    if (struct_map.getKey(sym)) |k| {
-        struct_map.put(vm.valAllocator(), k, vals[2]) catch return Error.RuntimeError;
+    if (struct_map.getEntry(sym_id)) |entry| {
+        entry.value_ptr.* = vals[2];
         return .none;
     }
-    const sym_key = vm.valAllocator().dupe(u8, sym) catch return Error.RuntimeError;
-    errdefer vm.valAllocator().free(sym_key);
-    struct_map.put(vm.valAllocator(), sym_key, vals[2]) catch return Error.RuntimeError;
+    struct_map.put(vm.valAllocator(), sym_id, vals[2]) catch return Error.RuntimeError;
     return .none;
 }
 
@@ -253,11 +219,11 @@ fn structGet(_: *Vm, vals: []const Val) Error!Val {
         .structV => |m| m,
         else => return Error.TypeError,
     };
-    const sym = switch (vals[1]) {
+    const sym_id = switch (vals[1]) {
         .symbol => |s| s,
         else => return Error.TypeError,
     };
-    const v = struct_map.get(sym) orelse return Error.RuntimeError;
+    const v = struct_map.get(sym_id) orelse return Error.RuntimeError;
     return v;
 }
 
