@@ -111,7 +111,7 @@ pub fn toZig(self: *Vm, T: type, alloc: std.mem.Allocator, val: Val) !T {
             }
         },
         .Struct => |info| {
-            const map = switch (val) {
+            const struct_val = switch (val) {
                 .structV => |m| m,
                 else => return error.TypeError,
             };
@@ -128,7 +128,7 @@ pub fn toZig(self: *Vm, T: type, alloc: std.mem.Allocator, val: Val) !T {
                 @memcpy(&fizz_field_name, field.name);
                 makeKebabCase(&fizz_field_name);
                 if (self.env.memory_manager.symbols.getId(&fizz_field_name)) |sym| {
-                    const field_val = map.get(sym) orelse
+                    const field_val = struct_val.map.get(sym) orelse
                         return Error.TypeError;
                     const field_zig_val = try self.toZig(field.type, alloc, field_val);
                     errdefer toZigClean(field.type, alloc, field_zig_val, null);

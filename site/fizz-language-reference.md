@@ -11,14 +11,15 @@ nav_order: 2
 
 ### define
 
-`(define <name> <value>)`
+Values - `(define <name> <value>)`
+Functions - `(define (<name> <args...>) <expr>...)`
 
 Define a value within the current module that can be referenced.
 
 ```lisp
 >> (define x 12)
->> (define square
->>   (lambda (x) (* x x)))
+>> (define (square x)
+>>   (* x x))
 >> (square x)
 $1 = 144
 ```
@@ -27,12 +28,12 @@ $1 = 144
 
 `(lambda (<args...>) <exprs...>)`
 
-Lambda is used to define a function.
+Define a function.
 
 ```lisp
 >> (define my-plus-func (lambda (a b) (+ a b)))
 >> my-plus-func
-$1 = <function >
+$1 = <function _>
 >> (my-plus-func 2 2)
 $2 = 4
 >> ((lambda (a b) (- a b)) 2 2)
