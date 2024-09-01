@@ -2,6 +2,7 @@ const ByteCode = @import("ByteCode.zig");
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
+const Symbol = Val.Symbol;
 const Compiler = @This();
 const Env = @import("Env.zig");
 const Vm = @import("Vm.zig");
@@ -26,13 +27,16 @@ module: *Module,
 is_module: bool = false,
 
 /// The values that are defined in `module`.
-module_defined_vals: std.StringHashMap(void),
+module_defined_vals: std.StringHashMap(Symbol),
 
 /// Initialize a compiler for a function that lives inside `module`.
 pub fn initFunction(allocator: std.mem.Allocator, env: *Env, module: *Module, args: []const []const u8) !Compiler {
-    var module_defined_vals = std.StringHashMap(void).init(allocator);
+    var module_defined_vals = std.StringHashMap(Symbol).init(allocator);
     var module_definitions = module.values.keyIterator();
-    while (module_definitions.next()) |def| try module_defined_vals.put(def.*, {});
+    while (module_definitions.next()) |sym| {
+        if (env.memory_manager.symbols.getName(sym.*)) |sym_name|
+            try module_defined_vals.put(sym_name, sym.*);
+    }
     const scopes = try ScopeManager.initWithArgs(allocator, args);
     return .{
         .env = env,
@@ -45,9 +49,12 @@ pub fn initFunction(allocator: std.mem.Allocator, env: *Env, module: *Module, ar
 
 /// Initialize a compiler for a module definition.
 pub fn initModule(allocator: std.mem.Allocator, env: *Env, module: *Module) !Compiler {
-    var module_defined_vals = std.StringHashMap(void).init(allocator);
+    var module_defined_vals = std.StringHashMap(Symbol).init(allocator);
     var module_definitions = module.values.keyIterator();
-    while (module_definitions.next()) |def| try module_defined_vals.put(def.*, {});
+    while (module_definitions.next()) |sym| {
+        if (env.memory_manager.symbols.getName(sym.*)) |sym_name|
+            try module_defined_vals.put(sym_name, sym.*);
+    }
     return .{
         .env = env,
         .scopes = try ScopeManager.init(allocator),
@@ -67,7 +74,7 @@ pub fn deinit(self: *Compiler) void {
 pub fn compile(self: *Compiler, ir: *const Ir) !Val {
     var irs = [1]*const Ir{ir};
     if (self.is_module) {
-        try ir.populateDefinedVals(&self.module_defined_vals);
+        try ir.populateDefinedVals(&self.module_defined_vals, &self.env.memory_manager);
     }
     const bc = try self.compileImpl(&irs);
     if (bc.instructions.items.len == 0 or bc.instructions.items[bc.instructions.items.len - 1].tag() != .ret) {
@@ -126,11 +133,11 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
         .define => |def| {
             if (self.computeStackAction(def.expr) != .push) return Error.BadSyntax;
             if (is_module) {
-                const symbol_val = try self.env.memory_manager.allocateSymbolVal(def.name);
+                const sym = try self.env.memory_manager.allocateSymbol(def.name);
                 try self.addIr(bc, def.expr);
                 try bc.instructions.append(
                     self.env.memory_manager.allocator,
-                    .{ .define = symbol_val },
+                    .{ .define = sym },
                 );
             } else {
                 const local_idx = try self.scopes.addVariable(def.name);
@@ -154,11 +161,16 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
             if (self.scopes.variableIdx(s)) |var_idx| {
                 try bc.instructions.append(self.env.memory_manager.allocator, .{ .get_arg = var_idx });
             } else {
-                const sym = try self.env.memory_manager.allocator.dupe(u8, s);
-                const parsed_sym = Module.parseModuleAndSymbol(sym);
+                const parsed_sym = try Module.parseModuleAndSymbol(s, &self.env.memory_manager);
                 if (self.module_defined_vals.contains(s) or parsed_sym.module_alias != null) {
-                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_local = sym });
+                    const module = try self.env.memory_manager.allocator.dupe(u8, parsed_sym.module_alias orelse "");
+                    const local = .{
+                        .module = module,
+                        .sym = parsed_sym.sym,
+                    };
+                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_local = local });
                 } else {
+                    const sym = try self.env.memory_manager.allocateSymbol(s);
                     try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_global = sym });
                 }
             }
@@ -316,6 +328,8 @@ test "module with define expressions" {
     var compiler = try Compiler.initModule(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}));
     defer compiler.deinit();
     const actual = try compiler.compile(&ir);
+    const pi_symbol = try vm.env.memory_manager.allocateSymbol("pi");
+    const e_symbol = try vm.env.memory_manager.allocateSymbol("e");
     try std.testing.expectEqualDeep(Val{
         .bytecode = @constCast(&ByteCode{
             .name = "",
@@ -324,9 +338,9 @@ test "module with define expressions" {
             .instructions = std.ArrayListUnmanaged(ByteCode.Instruction){
                 .items = @constCast(&[_]ByteCode.Instruction{
                     .{ .push_const = .{ .float = 3.14 } },
-                    .{ .define = .{ .symbol = "pi" } },
+                    .{ .define = pi_symbol },
                     .{ .push_const = .{ .float = 2.718 } },
-                    .{ .define = .{ .symbol = "e" } },
+                    .{ .define = e_symbol },
                     .ret,
                 }),
                 .capacity = actual.bytecode.instructions.capacity,

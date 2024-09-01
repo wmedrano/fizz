@@ -75,6 +75,7 @@ It should be easy to get started writing Fizz. Fizz supports the following:
  > ```
 - Common datatypes like ints, floats, strings, structs, and lists.
  > ```lisp
+ > >> true
  > >> 1
  > >> 1.2
  > >> "hello world"

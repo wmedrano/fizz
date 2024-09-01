@@ -1,6 +1,7 @@
 const std = @import("std");
 const ByteCode = @import("ByteCode.zig");
 const Vm = @import("Vm.zig");
+const MemoryManager = @import("MemoryManager.zig");
 
 pub const Val = union(enum) {
     none,
@@ -8,13 +9,15 @@ pub const Val = union(enum) {
     int: i64,
     float: f64,
     string: []const u8,
-    symbol: []const u8,
+    symbol: Symbol,
     list: []Val,
-    structV: *std.StringHashMapUnmanaged(Val),
+    structV: *std.AutoHashMapUnmanaged(Symbol, Val),
     bytecode: *ByteCode,
     native_fn: NativeFn,
 
     const Tag = std.meta.Tag(Val);
+
+    pub const Symbol = struct { id: usize };
 
     pub const NativeFn = struct {
         pub const Error = error{
@@ -26,37 +29,74 @@ pub const Val = union(enum) {
         impl: *const fn (*Vm, []const Val) Error!Val,
     };
 
+    pub const Formatter = struct {
+        val: Val,
+        memory_manager: ?*const MemoryManager,
+
+        pub fn format(self: *const Formatter, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+            return self.formatImpl(writer, self.val);
+        }
+
+        fn formatImpl(self: *const Formatter, writer: anytype, val: Val) !void {
+            switch (val) {
+                .none => try writer.writeAll("none"),
+                .boolean => |b| try writer.writeAll(if (b) "true" else "false"),
+                .int => |i| try std.fmt.format(writer, "{d}", .{i}),
+                .float => |f| try std.fmt.format(writer, "{d}", .{f}),
+                .string => |s| {
+                    try writer.writeAll("\"");
+                    try writer.writeAll(s);
+                    try writer.writeAll("\"");
+                },
+                .symbol => |sym| {
+                    if (self.memory_manager) |mm| {
+                        if (mm.symbols.getName(sym)) |s| {
+                            try std.fmt.format(writer, "'{s}", .{s});
+                            return;
+                        }
+                    }
+                    try std.fmt.format(writer, "'symbol-#{d}", .{sym.id});
+                },
+                .list => |lst| {
+                    try writer.writeAll("(");
+                    for (lst, 0..) |v, idx| {
+                        if (idx > 0) try writer.writeAll(" ");
+                        try self.formatImpl(writer, v);
+                    }
+                    try writer.writeAll(")");
+                },
+                .structV => |struct_map| {
+                    var iter = struct_map.iterator();
+                    try writer.writeAll("(struct");
+                    while (iter.next()) |v| {
+                        try writer.writeAll(" ");
+                        try self.formatImpl(writer, .{ .symbol = v.key_ptr.* });
+                        try writer.writeAll(" ");
+                        try self.formatImpl(writer, v.value_ptr.*);
+                    }
+                    try writer.writeAll(")");
+                },
+                .bytecode => |bc| try std.fmt.format(
+                    writer,
+                    "<function {s}>",
+                    .{if (bc.name.len == 0) "_" else bc.name},
+                ),
+                .native_fn => |nf| try std.fmt.format(writer, "<native-func #{d}>", .{@intFromPtr(nf.impl)}),
+            }
+        }
+    };
+
     pub const empty_list: Val = Val{ .list = &[0]Val{} };
 
+    /// Create a new formatter. This allows printing Val objects. For better fidelity, pass in the
+    /// `Vm`.
+    pub fn formatter(self: Val, vm: ?*const Vm) Formatter {
+        if (vm) |ptr| return .{ .val = self, .memory_manager = &ptr.env.memory_manager };
+        return .{ .val = self, .memory_manager = null };
+    }
+
     pub fn format(self: Val, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        switch (self) {
-            .none => try writer.print("none", .{}),
-            .boolean => |v| try writer.print("{any}", .{v}),
-            .int => |v| try writer.print("{d}", .{v}),
-            .float => |v| try writer.print("{d}", .{v}),
-            .string => |v| try writer.print("\"{s}\"", .{v}),
-            .symbol => |v| try writer.print("'{s}", .{v}),
-            .structV => |map| {
-                var iter = map.iterator();
-                try writer.print("(struct", .{});
-                while (iter.next()) |v| {
-                    try writer.print(" ", .{});
-                    try writer.print("'{s}", .{v.key_ptr.*});
-                    try writer.print(" ", .{});
-                    try writer.print("{any}", .{v.value_ptr.*});
-                }
-                try writer.print(")", .{});
-            },
-            .list => |lst| {
-                try writer.print("(", .{});
-                for (lst, 0..lst.len) |v, idx| {
-                    if (idx > 0) try writer.print(" {any}", .{v}) else try writer.print("{any}", .{v});
-                }
-                try writer.print(")", .{});
-            },
-            .bytecode => |v| try writer.print("<function {s}>", .{v.name}),
-            .native_fn => |v| try writer.print("<function native{*}>", .{v.impl}),
-        }
+        return writer.print("warning: Try Val.formatter for better Val formatting.\n{any}", .{self.formatter(null)});
     }
 
     /// Get the tag for value.

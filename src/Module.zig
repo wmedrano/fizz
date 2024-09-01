@@ -1,7 +1,10 @@
 const Module = @This();
 
+const Vm = @import("Vm.zig");
 const Env = @import("Env.zig");
+const MemoryManager = @import("MemoryManager.zig");
 const Val = @import("val.zig").Val;
+const Symbol = Val.Symbol;
 const iter = @import("datastructures/iter.zig");
 const std = @import("std");
 
@@ -9,7 +12,7 @@ const std = @import("std");
 name: []const u8,
 /// The values within the module. The strings and values are managed by a Vm. Only the hashmap
 /// datastructure itself is managed by Module.
-values: std.StringHashMapUnmanaged(Val) = .{},
+values: std.AutoHashMapUnmanaged(Symbol, Val) = .{},
 /// Map from alias to module that this module has access to.
 alias_to_module: std.StringHashMapUnmanaged(*Module),
 
@@ -50,12 +53,24 @@ pub fn deinitLocal(self: *Module, allocator: std.mem.Allocator) void {
 
 /// Set a value within the module.
 pub fn setVal(self: *Module, env: *Env, sym: []const u8, v: Val) !void {
-    const interned_sym = try env.memory_manager.allocateString(sym);
-    try self.values.put(env.memory_manager.allocator, interned_sym, v);
+    const new_sym = try env.memory_manager.allocateSymbol(sym);
+    try self.setValBySymbol(env, new_sym, v);
+}
+
+/// Set a value within the module by the symbol id.
+pub fn setValBySymbol(self: *Module, env: *Env, sym: Symbol, v: Val) !void {
+    try self.values.put(env.memory_manager.allocator, sym, v);
 }
 
 /// Get a value within the module.
-pub fn getVal(self: *const Module, sym: []const u8) ?Val {
+pub fn getVal(self: *const Module, memory_manager: *const MemoryManager, name: []const u8) ?Val {
+    if (memory_manager.nameToSymbol(name)) |sym|
+        return self.values.get(sym);
+    return null;
+}
+
+/// Get a value within the module by its symbol id.
+pub fn getValBySymbol(self: *const Module, sym: Symbol) ?Val {
     return self.values.get(sym);
 }
 
@@ -96,50 +111,39 @@ pub fn defaultModuleAlias(path: []const u8) []const u8 {
     return path[start..];
 }
 
-pub const AliasAndSymbol = struct { module_alias: ?[]const u8, symbol: []const u8 };
+pub const AliasAndSymbol = struct { module_alias: ?[]const u8, sym: Symbol };
 
 /// Parse the module and symbol.
-pub fn parseModuleAndSymbol(ident: []const u8) AliasAndSymbol {
+pub fn parseModuleAndSymbol(ident: []const u8, memory_manager: *MemoryManager) !AliasAndSymbol {
     var separator_idx: usize = 0;
     while (separator_idx < ident.len and ident[separator_idx] != '/') {
         separator_idx += 1;
     }
     if (separator_idx == ident.len or separator_idx == 0 or separator_idx + 1 == ident.len) {
-        return .{ .module_alias = null, .symbol = ident };
+        const sym = try memory_manager.allocateSymbol(ident);
+        return .{ .module_alias = null, .sym = sym };
     }
     return .{
         .module_alias = ident[0..separator_idx],
-        .symbol = ident[separator_idx + 1 ..],
+        .sym = try memory_manager.allocateSymbol(ident[separator_idx + 1 ..]),
     };
 }
 
 /// An iterator over values referenced within the module.
 pub const ValIterator = struct {
-    /// The next (symbol) value that will be returned.
-    next_val: ?[]const u8,
     /// The underlying iterator over values.
-    iterator: std.StringHashMapUnmanaged(Val).Iterator,
+    iterator: std.AutoHashMapUnmanaged(Symbol, Val).ValueIterator,
 
     /// Get the next referenced value.
     pub fn next(self: *ValIterator) ?Val {
-        if (self.next_val) |v| {
-            self.next_val = null;
-            return .{ .symbol = v };
-        }
-        if (self.iterator.next()) |nxt| {
-            self.next_val = nxt.key_ptr.*;
-            return nxt.value_ptr.*;
-        }
+        if (self.iterator.next()) |v| return v.*;
         return null;
     }
 };
 
 /// Iterate over all referenced values.
 pub fn iterateVals(self: *const Module) ValIterator {
-    return ValIterator{
-        .next_val = null,
-        .iterator = self.values.iterator(),
-    };
+    return .{ .iterator = self.values.valueIterator() };
 }
 
 /// Get the directory for the module or the working directory if it is a virtual module.
@@ -159,7 +163,7 @@ test "can iterate over values" {
     const actual = try iter.toSlice(Val, std.testing.allocator, &it);
     defer std.testing.allocator.free(actual);
     try std.testing.expectEqualDeep(
-        &[_]Val{ .{ .int = 42 }, .{ .symbol = "test-val" } },
+        &[_]Val{.{ .int = 42 }},
         actual,
     );
 }
@@ -182,24 +186,27 @@ test "default module alias" {
 }
 
 test "parse module and symbol" {
+    var vm = try Vm.init(std.testing.allocator);
+    defer vm.deinit();
+    var mm = &vm.env.memory_manager;
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = null, .symbol = "/" },
-        parseModuleAndSymbol("/"),
+        AliasAndSymbol{ .module_alias = null, .sym = try mm.allocateSymbol("/") },
+        parseModuleAndSymbol("/", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = null, .symbol = "module/" },
-        parseModuleAndSymbol("module/"),
+        AliasAndSymbol{ .module_alias = null, .sym = try mm.allocateSymbol("module/") },
+        parseModuleAndSymbol("module/", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = null, .symbol = "/symbol" },
-        parseModuleAndSymbol("/symbol"),
+        AliasAndSymbol{ .module_alias = null, .sym = try mm.allocateSymbol("/symbol") },
+        parseModuleAndSymbol("/symbol", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = "module", .symbol = "symbol" },
-        parseModuleAndSymbol("module/symbol"),
+        AliasAndSymbol{ .module_alias = "module", .sym = try mm.allocateSymbol("symbol") },
+        parseModuleAndSymbol("module/symbol", mm),
     );
     try std.testing.expectEqualDeep(
-        AliasAndSymbol{ .module_alias = "module", .symbol = "symbol/subsymbol" },
-        parseModuleAndSymbol("module/symbol/subsymbol"),
+        AliasAndSymbol{ .module_alias = "module", .sym = try mm.allocateSymbol("symbol/subsymbol") },
+        parseModuleAndSymbol("module/symbol/subsymbol", mm),
     );
 }
