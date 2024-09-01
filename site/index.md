@@ -23,7 +23,7 @@ Zig**.
 
 1. Download Fizz and place it in `build.zig.zon`.
    ```sh
-   zig fetch --save https://github.com/wmedrano/fiz/archive/refs/tags/v0.2.0.tar.gz
+   zig fetch --save https://github.com/wmedrano/fiz/archive/refs/tags/v0.2.1.tar.gz
    ```
 1. Add Fizz as a dependency in `build.zig`.
    ```zig

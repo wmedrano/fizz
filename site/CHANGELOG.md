@@ -20,7 +20,12 @@ following tradeoffs may happen:
 
 ## Releases
 
-### 0.2.0 (Current)
+### 0.2.1 (Current)
+
+- Improved performance by interning symbol strings.
+- `(define (<name> <arg>...) <expr>...)` syntax available for functions.
+
+### 0.2.0
 
 **Zig API**
 
