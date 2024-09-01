@@ -3,6 +3,7 @@ const Val = @import("val.zig").Val;
 const Symbol = Val.Symbol;
 const ByteCode = @import("ByteCode.zig");
 const Module = @import("Module.zig");
+const StringInterner = @import("datastructures/string_interner.zig").StringInterner;
 
 const std = @import("std");
 
@@ -12,10 +13,9 @@ allocator: std.mem.Allocator,
 /// cleaned up for garbage collection.
 reachable_color: Color = Color.red,
 
-/// A map from name to its symbol.
-name_to_symbol: std.StringHashMapUnmanaged(Symbol) = .{},
-/// A map from symbol to its name.
-symbol_to_name: std.AutoHashMapUnmanaged(Symbol, []const u8) = .{},
+/// Contains all the symbols.
+symbols: StringInterner(Symbol) = .{},
+
 /// A map from an owned string to its reachable color.
 strings: std.StringHashMapUnmanaged(Color) = .{},
 /// A map from a struct pointer to its Color.
@@ -62,11 +62,7 @@ pub fn deinit(self: *MemoryManager) void {
     self.sweep() catch {};
     self.sweep() catch {};
 
-    var symbols_iter = self.name_to_symbol.keyIterator();
-    while (symbols_iter.next()) |s| self.allocator.free(s.*);
-    self.name_to_symbol.deinit(self.allocator);
-    self.symbol_to_name.deinit(self.allocator);
-
+    self.symbols.deinit(self.allocator);
     self.strings.deinit(self.allocator);
     self.structs.deinit(self.allocator);
     self.lists.deinit(self.allocator);
@@ -100,13 +96,7 @@ pub fn allocateStringVal(self: *MemoryManager, str: []const u8) !Val {
 
 /// Create a new symbol and return its id. If the symbol already exists, its id is returned.
 pub fn allocateSymbol(self: *MemoryManager, name: []const u8) !Symbol {
-    if (self.nameToSymbol(name)) |sym| return sym;
-    const new_name = try self.allocator.dupe(u8, name);
-    const sym = Symbol{ .id = @intCast(self.name_to_symbol.count()) };
-    try self.name_to_symbol.put(self.allocator, new_name, sym);
-    errdefer _ = self.name_to_symbol.remove(new_name);
-    try self.symbol_to_name.put(self.allocator, sym, new_name);
-    return sym;
+    return try self.symbols.getOrMakeId(self.allocator, name);
 }
 
 /// Get the symbol from a name or `null` if it has not been allocated.

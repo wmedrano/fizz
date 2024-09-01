@@ -127,7 +127,7 @@ pub fn toZig(self: *Vm, T: type, alloc: std.mem.Allocator, val: Val) !T {
                 var fizz_field_name: [field.name.len]u8 = undefined;
                 @memcpy(&fizz_field_name, field.name);
                 makeKebabCase(&fizz_field_name);
-                if (self.env.memory_manager.name_to_symbol.get(&fizz_field_name)) |sym| {
+                if (self.env.memory_manager.symbols.getId(&fizz_field_name)) |sym| {
                     const field_val = map.get(sym) orelse
                         return Error.TypeError;
                     const field_zig_val = try self.toZig(field.type, alloc, field_val);
@@ -534,7 +534,7 @@ fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Erro
 
 fn errSymbolNotFound(self: *Vm, module: *const Module, sym: Symbol) Error {
     @setCold(true);
-    const name = self.env.memory_manager.symbol_to_name.get(sym) orelse "*unknown-symbol*";
+    const name = self.env.memory_manager.symbols.getName(sym) orelse "*unknown-symbol*";
     const msg = try std.fmt.allocPrint(
         self.env.errors.allocator(),
         "Symbol {s} (id={d}) not found in module {s}",

@@ -34,7 +34,7 @@ pub fn initFunction(allocator: std.mem.Allocator, env: *Env, module: *Module, ar
     var module_defined_vals = std.StringHashMap(Symbol).init(allocator);
     var module_definitions = module.values.keyIterator();
     while (module_definitions.next()) |sym| {
-        if (env.memory_manager.symbol_to_name.get(sym.*)) |sym_name|
+        if (env.memory_manager.symbols.getName(sym.*)) |sym_name|
             try module_defined_vals.put(sym_name, sym.*);
     }
     const scopes = try ScopeManager.initWithArgs(allocator, args);
@@ -52,7 +52,7 @@ pub fn initModule(allocator: std.mem.Allocator, env: *Env, module: *Module) !Com
     var module_defined_vals = std.StringHashMap(Symbol).init(allocator);
     var module_definitions = module.values.keyIterator();
     while (module_definitions.next()) |sym| {
-        if (env.memory_manager.symbol_to_name.get(sym.*)) |sym_name|
+        if (env.memory_manager.symbols.getName(sym.*)) |sym_name|
             try module_defined_vals.put(sym_name, sym.*);
     }
     return .{

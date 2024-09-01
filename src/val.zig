@@ -50,7 +50,7 @@ pub const Val = union(enum) {
                 },
                 .symbol => |sym| {
                     if (self.memory_manager) |mm| {
-                        if (mm.symbol_to_name.get(sym)) |s| {
+                        if (mm.symbols.getName(sym)) |s| {
                             try std.fmt.format(writer, "'{s}", .{s});
                             return;
                         }
