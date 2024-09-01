@@ -53,10 +53,10 @@ fn equalImpl(a: Val, b: Val) Error!bool {
             return true;
         },
         .structV => |x| {
-            if (x.count() != b.structV.count()) return false;
-            var iter = x.iterator();
+            if (x.map.count() != b.structV.map.count()) return false;
+            var iter = x.map.iterator();
             while (iter.next()) |a_entry| {
-                const b_val = b.structV.get(a_entry.key_ptr.*) orelse return false;
+                const b_val = b.structV.map.get(a_entry.key_ptr.*) orelse return false;
                 if (!try equalImpl(a_entry.value_ptr.*, b_val)) return false;
             }
             return true;
@@ -180,24 +180,24 @@ fn makeStruct(vm: *Vm, vals: []const Val) Error!Val {
             else => return Error.TypeError,
         }
     }
-    const fields = vm.env.memory_manager.allocateStruct() catch return Error.RuntimeError;
-    fields.ensureTotalCapacity(vm.valAllocator(), @intCast(field_count)) catch return Error.RuntimeError;
+    const new_struct = vm.env.memory_manager.allocateStruct() catch return Error.RuntimeError;
+    new_struct.map.ensureTotalCapacity(vm.valAllocator(), @intCast(field_count)) catch return Error.RuntimeError;
     for (0..field_count) |idx| {
         const name_idx = idx * 2;
         const val_idx = name_idx + 1;
         switch (vals[name_idx]) {
             .symbol => |k| {
-                fields.put(vm.valAllocator(), k, vals[val_idx]) catch return Error.RuntimeError;
+                new_struct.map.put(vm.valAllocator(), k, vals[val_idx]) catch return Error.RuntimeError;
             },
             else => unreachable,
         }
     }
-    return .{ .structV = fields };
+    return .{ .structV = new_struct };
 }
 
 fn structSet(vm: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 3) return Error.ArrityError;
-    const struct_map = switch (vals[0]) {
+    const struct_val = switch (vals[0]) {
         .structV => |m| m,
         else => return Error.TypeError,
     };
@@ -205,17 +205,17 @@ fn structSet(vm: *Vm, vals: []const Val) Error!Val {
         .symbol => |s| s,
         else => return Error.TypeError,
     };
-    if (struct_map.getEntry(sym)) |entry| {
+    if (struct_val.map.getEntry(sym)) |entry| {
         entry.value_ptr.* = vals[2];
         return .none;
     }
-    struct_map.put(vm.valAllocator(), sym, vals[2]) catch return Error.RuntimeError;
+    struct_val.map.put(vm.valAllocator(), sym, vals[2]) catch return Error.RuntimeError;
     return .none;
 }
 
 fn structGet(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
-    const struct_map = switch (vals[0]) {
+    const struct_val = switch (vals[0]) {
         .structV => |m| m,
         else => return Error.TypeError,
     };
@@ -223,7 +223,7 @@ fn structGet(_: *Vm, vals: []const Val) Error!Val {
         .symbol => |s| s,
         else => return Error.TypeError,
     };
-    const v = struct_map.get(sym) orelse return Error.RuntimeError;
+    const v = struct_val.map.get(sym) orelse return Error.RuntimeError;
     return v;
 }
 

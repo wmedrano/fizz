@@ -11,13 +11,20 @@ pub const Val = union(enum) {
     string: []const u8,
     symbol: Symbol,
     list: []Val,
-    structV: *std.AutoHashMapUnmanaged(Symbol, Val),
+    structV: *StructVal,
     bytecode: *ByteCode,
     native_fn: NativeFn,
 
     const Tag = std.meta.Tag(Val);
 
     pub const Symbol = struct { id: usize };
+
+    pub const StructVal = struct {
+        map: std.AutoHashMapUnmanaged(Symbol, Val),
+        pub fn deinit(self: *StructVal, allocator: std.mem.Allocator) void {
+            self.map.deinit(allocator);
+        }
+    };
 
     pub const NativeFn = struct {
         pub const Error = error{
@@ -66,7 +73,7 @@ pub const Val = union(enum) {
                     try writer.writeAll(")");
                 },
                 .structV => |struct_map| {
-                    var iter = struct_map.iterator();
+                    var iter = struct_map.map.iterator();
                     try writer.writeAll("(struct");
                     while (iter.next()) |v| {
                         try writer.writeAll(" ");

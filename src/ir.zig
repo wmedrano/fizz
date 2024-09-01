@@ -255,11 +255,7 @@ const IrBuilder = struct {
                                             try self.errors.addError(.{ .msg = "define expected form (define <ident> <expr>)" });
                                             return Error.SyntaxError;
                                         },
-                                        2 => return self.buildDefine(&rest[0], &rest[1]),
-                                        else => {
-                                            try self.errors.addError(.{ .msg = "define expected form (define <ident> <expr>)" });
-                                            return Error.SyntaxError;
-                                        },
+                                        else => return self.buildDefine(&rest[0], rest[1..]),
                                     }
                                 },
                                 .import => {
@@ -314,11 +310,10 @@ const IrBuilder = struct {
         return ret;
     }
 
-    fn buildDefine(self: *IrBuilder, sym: *const Ast.Node, def: *const Ast.Node) Error!*Ir {
+    fn buildDefine(self: *IrBuilder, sym: *const Ast.Node, exprs: []const Ast.Node) Error!*Ir {
         const name = switch (sym.*) {
-            .tree => {
-                try self.errors.addError(.{ .msg = "define expected form (define <ident> <expr>) but <ident> was malformed" });
-                return Error.SyntaxError;
+            .tree => |name_and_args| {
+                return self.buildDefineLambda(name_and_args, exprs);
             },
             .leaf => |l| switch (l) {
                 .identifier => |ident| ident,
@@ -328,7 +323,9 @@ const IrBuilder = struct {
                 },
             },
         };
-        var expr = try self.build(name, def);
+        if (exprs.len == 0) return Error.SyntaxError;
+        if (exprs.len > 1) return Error.SyntaxError;
+        var expr = try self.build(name, &exprs[0]);
         errdefer expr.deinit(self.allocator);
         const ret = try self.allocator.create(Ir);
         errdefer ret.deinit(self.allocator);
@@ -336,6 +333,46 @@ const IrBuilder = struct {
             .define = .{
                 .name = name,
                 .expr = expr,
+            },
+        };
+        return ret;
+    }
+
+    fn buildDefineLambda(self: *IrBuilder, name_and_args: []const Ast.Node, exprs: []const Ast.Node) Error!*Ir {
+        if (name_and_args.len == 0) {
+            try self.errors.addError(.{
+                .msg = "define expected form (define (<ident> <args>...) <expr>) but <ident> was not found",
+            });
+            return Error.SyntaxError;
+        }
+        const name = switch (name_and_args[0]) {
+            .tree => {
+                return Error.SyntaxError;
+            },
+            .leaf => |l| switch (l) {
+                .identifier => |ident| ident,
+                else => {
+                    return Error.SyntaxError;
+                },
+            },
+        };
+        const args = Ast.Node{ .tree = name_and_args[1..] };
+        for (args.tree) |arg| {
+            switch (arg) {
+                .tree => return Error.SyntaxError,
+                .leaf => |l| switch (l) {
+                    .identifier => {},
+                    else => return Error.SyntaxError,
+                },
+            }
+        }
+        const lambda_ir = try self.buildLambdaExpr(name, &args, exprs);
+        const ret = try self.allocator.create(Ir);
+        errdefer ret.deinit(self.allocator);
+        ret.* = .{
+            .define = .{
+                .name = name,
+                .expr = lambda_ir,
             },
         };
         return ret;

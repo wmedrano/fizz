@@ -69,7 +69,7 @@ It should be easy to get started writing Fizz. Fizz supports the following:
  > ```lisp
  > >> (define pi 3.14)
  > >> (* 2 pi) ;; 6.28
- > >> (define plus (lambda (a b) (+ a b)))
+ > >> (define (plus a b) (+ a b))
  > >> (plus 2 2) ;; 4
  > >> (if (< 1 2) "red" "blue") ;; "red"
  > ```

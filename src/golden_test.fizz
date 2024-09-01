@@ -51,14 +51,13 @@ test-struct
 
 "------------------------------------------------------------"
 "test fib"
-(define fib
-  (lambda (n)
-    (define too-small? (< n 2))
-    (if too-small? n
-      (do
-        (define fib-1 (fib (- n 1)))
-	(define fib-2 (fib (- n 2)))
-	(+ fib-1 fib-2)))))
+(define (fib n)
+  (define too-small? (< n 2))
+  (if too-small? n
+    (do
+      (define fib-1 (fib (- n 1)))
+      (define fib-2 (fib (- n 2)))
+      (+ fib-1 fib-2))))
 fib
 (fib 25)
 
