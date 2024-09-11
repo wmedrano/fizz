@@ -3,7 +3,6 @@ const Val = @import("val.zig").Val;
 const Symbol = Val.Symbol;
 const StructVal = Val.StructVal;
 const ByteCode = @import("ByteCode.zig");
-const Module = @import("Module.zig");
 const StringInterner = @import("datastructures/string_interner.zig").StringInterner;
 
 const std = @import("std");
@@ -141,7 +140,7 @@ pub fn allocateListVal(self: *MemoryManager, contents: []const Val) !Val {
 }
 
 /// Allocate a new bytecode object.
-pub fn allocateByteCode(self: *MemoryManager, module: *Module) !*ByteCode {
+pub fn allocateByteCode(self: *MemoryManager) !*ByteCode {
     const bc = try self.allocator.create(ByteCode);
     try self.bytecode.put(self.allocator, bc, self.reachable_color.swap());
     bc.* = ByteCode{
@@ -149,7 +148,6 @@ pub fn allocateByteCode(self: *MemoryManager, module: *Module) !*ByteCode {
         .arg_count = 0,
         .locals_count = 0,
         .instructions = .{},
-        .module = module,
     };
     return bc;
 }

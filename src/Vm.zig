@@ -2,8 +2,8 @@ const Vm = @This();
 
 const Compiler = @import("Compiler.zig");
 const Ir = @import("ir.zig").Ir;
-const Module = @import("Module.zig");
 const std = @import("std");
+const builtins = @import("builtins.zig");
 const ErrorCollector = @import("datastructures/ErrorCollector.zig");
 const Ast = @import("Ast.zig");
 const Symbol = Val.Symbol;
@@ -17,9 +17,11 @@ env: Env,
 
 /// Create a new virtual machine.
 pub fn init(allocator: std.mem.Allocator) std.mem.Allocator.Error!Vm {
-    return Vm{
+    var vm = Vm{
         .env = try Env.init(allocator),
     };
+    try builtins.registerAll(&vm);
+    return vm;
 }
 
 /// Deinitialize a virtual machine. Using self after calling deinit is invalid.
@@ -39,7 +41,7 @@ pub fn evalStr(self: *Vm, T: type, allocator: std.mem.Allocator, expr: []const u
     defer tmp_arena.deinit();
     const tmp_allocator = tmp_arena.allocator();
     const ir = try Ir.initStrExpr(tmp_allocator, &self.env.errors, expr);
-    var compiler = try Compiler.initModule(tmp_allocator, &self.env, try self.getOrCreateModule(.{}));
+    var compiler = try Compiler.init(tmp_allocator, &self.env);
     const bc = try compiler.compile(ir);
     const ret_val = try self.evalFuncVal(bc, &.{});
     return self.toZig(T, allocator, ret_val);
@@ -60,8 +62,9 @@ pub fn registerGlobalFn(
     name: []const u8,
     func: *const fn (*Vm, []const Val) NativeFnError!Val,
 ) !void {
+    const sym = try self.env.memory_manager.allocateSymbol(name);
     const func_val = Val{ .native_fn = .{ .impl = func } };
-    try self.env.global_module.setVal(&self.env, name, func_val);
+    try self.env.global_values.put(self.env.memory_manager.allocator, sym, func_val);
 }
 
 /// Get the memory allocator used for all `Val`.
@@ -198,17 +201,9 @@ pub fn runGc(self: *Vm) !void {
     for (self.env.stack.items) |v| try self.env.memory_manager.markVal(v);
     for (self.env.frames.items) |f| try self.env.memory_manager.markVal(.{ .bytecode = f.bytecode });
 
-    var global_values = self.env.global_module.iterateVals();
+    var global_values = self.env.global_values.valueIterator();
     while (global_values.next()) |v| {
-        try self.env.memory_manager.markVal(v);
-    }
-
-    var modules_iterator = self.env.modules.valueIterator();
-    while (modules_iterator.next()) |module| {
-        var vals_iterator = module.*.iterateVals();
-        while (vals_iterator.next()) |v| {
-            try self.env.memory_manager.markVal(v);
-        }
+        try self.env.memory_manager.markVal(v.*);
     }
 
     var strings_iter = self.env.memory_manager.keep_alive_strings.keyIterator();
@@ -261,58 +256,6 @@ inline fn refDecr(_: *Vm, map: anytype, obj: anytype) !void {
         entry.value_ptr.* -= 1;
         if (entry.value_ptr.* == 0) map.removeByPtr(entry.key_ptr);
     }
-}
-
-/// Get the module with the given name. If it does not exist, then it is created.
-pub fn getOrCreateModule(self: *Vm, builder: Module.Builder) !*Module {
-    if (self.getModule(builder.name)) |m| {
-        return m;
-    }
-    const m = try Module.init(self.valAllocator(), builder);
-    try self.registerModule(m);
-    return m;
-}
-
-/// Get the Module by name or null if it does not exist.
-pub fn getModule(self: *Vm, name: []const u8) ?*Module {
-    if (std.mem.eql(u8, name, self.env.global_module.name)) {
-        return &self.env.global_module;
-    }
-    return self.env.modules.get(name);
-}
-
-/// Register a module. An error is returned if there is a memory error or the module already exists.
-pub fn registerModule(self: *Vm, module: *Module) !void {
-    if (self.getModule(module.name)) |_| {
-        return error.ModuleAlreadyExists;
-    }
-    try self.env.modules.put(self.valAllocator(), module.name, module);
-}
-
-/// Delete a module.
-pub fn deleteModule(self: *Vm, module: *Module) !void {
-    const module_entry = self.env.modules.getEntry(module.name) orelse return error.ModuleDoesNotExist;
-
-    // Remove from any aliases.
-    var del_arena = std.heap.ArenaAllocator.init(self.valAllocator());
-    defer del_arena.deinit();
-    var modules_iter = self.env.modules.valueIterator();
-    while (modules_iter.next()) |any_module| {
-        if (any_module.* == module) continue;
-        var aliases_to_delete = std.ArrayList([]const u8).init(del_arena.allocator());
-        var aliases_iter = any_module.*.alias_to_module.iterator();
-        while (aliases_iter.next()) |alias| {
-            if (alias.value_ptr.* == module) {
-                try aliases_to_delete.append(alias.key_ptr.*);
-            }
-        }
-        for (aliases_to_delete.items) |a| _ = any_module.*.clearModuleAlias(self.valAllocator(), a);
-        _ = del_arena.reset(.retain_capacity);
-    }
-
-    // Remove the module.
-    self.env.modules.removeByPtr(module_entry.key_ptr);
-    module.deinit(self.valAllocator());
 }
 
 /// Evaluate the function and return the result.
@@ -369,23 +312,13 @@ fn runNext(self: *Vm) Error!bool {
             const should_continue = try self.executeRet();
             if (!should_continue) return false;
         },
-        .deref_local => |s| {
-            if (s.module.len > 0) {
-                const m = frame.bytecode.module.alias_to_module.get(s.module) orelse
-                    return self.errModuleNotFound(s.module);
-                try self.executeDeref(m, s.sym);
-            } else {
-                try self.executeDeref(frame.bytecode.module, s.sym);
-            }
-        },
-        .deref_global => |s| try self.executeDeref(&self.env.global_module, s),
+        .deref_global => |s| try self.executeDeref(s),
         .eval => |n| try self.executeEval(frame, n),
         .jump => |n| frame.instruction += n,
         .jump_if => |n| if (try self.env.stack.pop().asBool()) {
             frame.instruction += n;
         },
-        .define => |symbol| try self.executeDefine(frame.bytecode.module, symbol),
-        .import_module => |path| try self.executeImportModule(frame.bytecode.module, path),
+        .define => |symbol| try self.executeDefine(symbol),
     }
     frame.instruction += 1;
     return true;
@@ -395,12 +328,12 @@ fn executePushConst(self: *Vm, v: Val) !void {
     try self.env.stack.append(self.valAllocator(), v);
 }
 
-fn executeDeref(self: *Vm, module: *const Module, sym: Symbol) Error!void {
-    if (module.getValBySymbol(sym)) |v| {
+fn executeDeref(self: *Vm, sym: Symbol) Error!void {
+    if (self.env.global_values.get(sym)) |v| {
         try self.env.stack.append(self.valAllocator(), v);
         return;
     }
-    return self.errSymbolNotFound(module, sym);
+    return self.errSymbolNotFound(sym);
 }
 
 fn executeGetArg(self: *Vm, frame: *const Env.Frame, idx: usize) !void {
@@ -468,64 +401,17 @@ fn executeRet(self: *Vm) !bool {
     return true;
 }
 
-fn executeDefine(self: *Vm, module: *Module, symbol_id: Symbol) Error!void {
+fn executeDefine(self: *Vm, symbol: Symbol) Error!void {
     const val = self.env.stack.pop();
-    try module.setValBySymbol(&self.env, symbol_id, val);
+    try self.env.global_values.put(self.env.memory_manager.allocator, symbol, val);
 }
 
-fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Error!void {
-    errdefer {
-        self.env.errors.addError("failed to import module", .{}) catch {};
-    }
-    const base_dir = module.directory() catch {
-        try self.env.errors.addError(
-            "could not determine working directory for module {s}",
-            .{module.name},
-        );
-        return Error.FileError;
-    };
-    const full_path = base_dir.realpathAlloc(self.valAllocator(), module_path) catch {
-        try self.env.errors.addError(
-            "could not determine path for {s}",
-            .{module_path},
-        );
-        return Error.FileError;
-    };
-    defer self.valAllocator().free(full_path);
-    const module_alias = Module.defaultModuleAlias(full_path);
-    if (self.getModule(full_path)) |m| {
-        try module.setModuleAlias(self.valAllocator(), module_alias, m);
-        return;
-    }
-
-    var arena = std.heap.ArenaAllocator.init(self.valAllocator());
-    defer arena.deinit();
-    const file_size_limit = 64 * 1024 * 1024;
-    const contents = std.fs.cwd().readFileAlloc(arena.allocator(), full_path, file_size_limit) catch {
-        try self.env.errors.addError(
-            "could not read file {any}",
-            .{full_path},
-        );
-        return Error.FileError;
-    };
-    const ast = Ast.initWithStr(arena.allocator(), &self.env.errors, contents) catch return Error.SyntaxError;
-    var module_ok = false;
-    const new_module = self.getOrCreateModule(.{ .name = full_path }) catch return Error.RuntimeError;
-    errdefer if (!module_ok) self.deleteModule(new_module) catch {};
-    const ir = Ir.init(arena.allocator(), &self.env.errors, ast.asts) catch return Error.RuntimeError;
-    var compiler = try Compiler.initModule(arena.allocator(), &self.env, new_module);
-    const module_bytecode = compiler.compile(ir) catch Error.RuntimeError;
-    _ = try self.evalNoReset(try module_bytecode, &.{});
-    module_ok = true;
-    try module.setModuleAlias(self.valAllocator(), module_alias, new_module);
-}
-
-fn errSymbolNotFound(self: *Vm, module: *const Module, sym: Symbol) Error {
+fn errSymbolNotFound(self: *Vm, sym: Symbol) Error {
     @setCold(true);
     const name = self.env.memory_manager.symbols.getName(sym) orelse "*unknown-symbol*";
     try self.env.errors.addError(
-        "Symbol {s} (id={d}) not found in module {s}",
-        .{ name, sym.id, module.name },
+        "Symbol {s} (id={d}) not found in global values",
+        .{ name, sym.id },
     );
     return Error.SymbolNotFound;
 }
@@ -727,7 +613,7 @@ test "multiple expressions returns last expression" {
 test "can deref symbols" {
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    try vm.env.global_module.setVal(&vm.env, "test", try vm.env.memory_manager.allocateStringVal("test-val"));
+    try vm.evalStr(void, std.testing.allocator, "(define test \"test-val\")");
     const actual = try vm.evalStr([]const u8, std.testing.allocator, "test");
     defer std.testing.allocator.free(actual);
     try std.testing.expectEqualDeep("test-val", actual);
@@ -770,47 +656,6 @@ test "recursive function can eval" {
         try vm.evalStr(i64, std.testing.allocator, "(fib 10)"),
     );
     try std.testing.expectEqualDeep(620, vm.env.runtime_stats.function_calls);
-}
-
-test "can only deref symbols from the same module" {
-    var vm = try Vm.init(std.testing.allocator);
-    defer vm.deinit();
-    try (try vm.getOrCreateModule(.{ .name = "*other*" }))
-        .setVal(&vm.env, "test", try vm.env.memory_manager.allocateStringVal("test-val"));
-    try std.testing.expectError(
-        error.SymbolNotFound,
-        vm.evalStr(Val, std.testing.allocator, "test"),
-    );
-}
-
-test "symbols from imported modules can be referenced" {
-    var vm = try Vm.init(std.testing.allocator);
-    defer vm.deinit();
-    _ = try vm.evalStr(Val, std.testing.allocator, "(import \"test_scripts/geometry.fizz\")");
-    try std.testing.expectEqualDeep(
-        3.14,
-        try vm.evalStr(f64, std.testing.allocator, "geometry/pi"),
-    );
-}
-
-test "module imports are relative" {
-    var vm = try Vm.init(std.testing.allocator);
-    defer vm.deinit();
-    errdefer std.debug.print("{any}\n", .{vm.env.errors});
-    try std.testing.expectEqualDeep({}, try vm.evalStr(void, std.testing.allocator, "(import \"test_scripts/import.fizz\")"));
-    try std.testing.expectEqualDeep(
-        6.28,
-        try vm.evalStr(f64, std.testing.allocator, "import/two-pi"),
-    );
-}
-
-test "import bad file fails" {
-    var vm = try Vm.init(std.testing.allocator);
-    defer vm.deinit();
-    try std.testing.expectError(
-        error.TypeError,
-        vm.evalStr(Val, std.testing.allocator, "(import \"test_scripts/fail.fizz\")"),
-    );
 }
 
 test "->str" {

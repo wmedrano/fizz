@@ -15,10 +15,6 @@ pub const Ir = union(enum) {
         name: []const u8,
         expr: *Ir,
     },
-    /// Import a module from a path.
-    import_module: struct {
-        path: []const u8,
-    },
     /// Dereference an identifier.
     deref: []const u8,
     /// A function call.
@@ -99,24 +95,11 @@ pub const Ir = union(enum) {
         return init(allocator, errors, asts.asts);
     }
 
-    /// Populate define_set with all symbols that are defined.
-    pub fn populateDefinedVals(self: *const Ir, defined_vals: *std.StringHashMap(Symbol), memory_manager: *MemoryManager) !void {
-        switch (self.*) {
-            .define => |def| {
-                const sym = try memory_manager.allocateSymbol(def.name);
-                try defined_vals.put(def.name, sym);
-            },
-            .ret => |r| for (r.exprs) |e| try e.populateDefinedVals(defined_vals, memory_manager),
-            else => {},
-        }
-    }
-
     /// Deallocate Ir and all related memory.
     pub fn deinit(self: *Ir, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .constant => {},
             .define => |def| def.expr.deinit(allocator),
-            .import_module => {},
             .deref => {},
             .function_call => |*f| {
                 f.function.deinit(allocator);
@@ -158,7 +141,6 @@ pub const Ir = union(enum) {
                 try d.expr.formatImpl(writer, indent + 1);
                 try writer.print(")", .{});
             },
-            .import_module => |i| try writer.print("import({s})", .{i.path}),
             .deref => |d| try writer.print("deref({s}) ", .{d}),
             .function_call => |f| {
                 try writer.print("funcall(\n", .{});
@@ -257,13 +239,6 @@ const IrBuilder = struct {
                                         },
                                         else => return self.buildDefine(&rest[0], rest[1..]),
                                     }
-                                },
-                                .import => {
-                                    if (rest.len != 1) {
-                                        try self.errors.addError("import expected form (import \"<path>\")", .{});
-                                        return Error.SyntaxError;
-                                    }
-                                    return self.buildImportModule(&rest[0]);
                                 },
                             },
                             else => return self.buildFunctionCall(first, rest),
@@ -374,36 +349,6 @@ const IrBuilder = struct {
             .define = .{
                 .name = name,
                 .expr = lambda_ir,
-            },
-        };
-        return ret;
-    }
-
-    fn buildImportModule(self: *IrBuilder, path_expr: *const Ast.Node) Error!*Ir {
-        const path = switch (path_expr.*) {
-            .tree => {
-                try self.errors.addError(
-                    "import expected form (import \"<path>\") but path was malformed",
-                    .{},
-                );
-                return Error.SyntaxError;
-            },
-            .leaf => |l| switch (l) {
-                .string => |ident| ident,
-                else => {
-                    try self.errors.addError(
-                        "import expected form (import \"<path>\") but path was malformed",
-                        .{},
-                    );
-                    return Error.SyntaxError;
-                },
-            },
-        };
-        const ret = try self.allocator.create(Ir);
-        errdefer ret.deinit(self.allocator);
-        ret.* = .{
-            .import_module = .{
-                .path = path,
             },
         };
         return ret;
@@ -698,39 +643,4 @@ test "nested badly formed lambda produces error" {
         Ir.Error.SyntaxError,
         Ir.initStrExpr(std.testing.allocator, &errors, "(define foo (lambda () (lambda ())))"),
     );
-}
-
-test "definedVals visits all defined values" {
-    var memory_manager = MemoryManager.init(std.testing.allocator);
-    defer memory_manager.deinit();
-    var errors = ErrorCollector.init(std.testing.allocator);
-    defer errors.deinit();
-    const ir = &Ir{
-        .ret = .{
-            .exprs = @constCast(&[_]*Ir{
-                @constCast(&Ir{
-                    .define = .{
-                        .name = "foo",
-                        .expr = @constCast(&Ir{
-                            .constant = .{ .int = 1 },
-                        }),
-                    },
-                }),
-                @constCast(&Ir{
-                    .define = .{
-                        .name = "bar",
-                        .expr = @constCast(&Ir{
-                            .constant = .{ .int = 2 },
-                        }),
-                    },
-                }),
-            }),
-        },
-    };
-    var actual = std.StringHashMap(Symbol).init(std.testing.allocator);
-    defer actual.deinit();
-    try ir.populateDefinedVals(&actual, &memory_manager);
-    try std.testing.expectEqual(2, actual.count());
-    try std.testing.expect(actual.contains("foo"));
-    try std.testing.expect(actual.contains("bar"));
 }
