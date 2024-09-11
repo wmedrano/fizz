@@ -6,7 +6,6 @@ const Symbol = Val.Symbol;
 const Compiler = @This();
 const Env = @import("Env.zig");
 const Vm = @import("Vm.zig");
-const Module = @import("Module.zig");
 const ScopeManager = @import("datastructures/ScopeManager.zig");
 
 const std = @import("std");
@@ -20,62 +19,37 @@ env: *Env,
 /// Manage variable scopes.
 scopes: ScopeManager,
 
-/// The module that the code is under.
-module: *Module,
-/// If a module is being compiled. This enables special behavior such as:
-///   - Define statements set values within the module.
-is_module: bool = false,
+/// If the compilation is at the top level. This enables special behavior such as:
+///   - Define statements set global values.
+is_toplevel: bool = false,
 
-/// The values that are defined in `module`.
-module_defined_vals: std.StringHashMap(Symbol),
-
-/// Initialize a compiler for a function that lives inside `module`.
-pub fn initFunction(allocator: std.mem.Allocator, env: *Env, module: *Module, args: []const []const u8) !Compiler {
-    var module_defined_vals = std.StringHashMap(Symbol).init(allocator);
-    var module_definitions = module.values.keyIterator();
-    while (module_definitions.next()) |sym| {
-        if (env.memory_manager.symbols.getName(sym.*)) |sym_name|
-            try module_defined_vals.put(sym_name, sym.*);
-    }
+/// Initialize a compiler for a function.
+pub fn initFunction(allocator: std.mem.Allocator, env: *Env, args: []const []const u8) !Compiler {
     const scopes = try ScopeManager.initWithArgs(allocator, args);
     return .{
         .env = env,
         .scopes = scopes,
-        .module = module,
-        .is_module = false,
-        .module_defined_vals = module_defined_vals,
+        .is_toplevel = false,
     };
 }
 
-/// Initialize a compiler for a module definition.
-pub fn initModule(allocator: std.mem.Allocator, env: *Env, module: *Module) !Compiler {
-    var module_defined_vals = std.StringHashMap(Symbol).init(allocator);
-    var module_definitions = module.values.keyIterator();
-    while (module_definitions.next()) |sym| {
-        if (env.memory_manager.symbols.getName(sym.*)) |sym_name|
-            try module_defined_vals.put(sym_name, sym.*);
-    }
+/// Initialize a compiler for an expression.
+pub fn init(allocator: std.mem.Allocator, env: *Env) !Compiler {
     return .{
         .env = env,
         .scopes = try ScopeManager.init(allocator),
-        .module = module,
-        .is_module = true,
-        .module_defined_vals = module_defined_vals,
+        .is_toplevel = true,
     };
 }
 
 /// Deinitialize the compiler.
 pub fn deinit(self: *Compiler) void {
-    self.module_defined_vals.deinit();
     self.scopes.deinit();
 }
 
 /// Create a new ByteCode from the Ir.
 pub fn compile(self: *Compiler, ir: *const Ir) !Val {
     var irs = [1]*const Ir{ir};
-    if (self.is_module) {
-        try ir.populateDefinedVals(&self.module_defined_vals, &self.env.memory_manager);
-    }
     const bc = try self.compileImpl(&irs);
     if (bc.instructions.items.len == 0 or bc.instructions.items[bc.instructions.items.len - 1].tag() != .ret) {
         try bc.instructions.append(self.env.memory_manager.allocator, .ret);
@@ -84,7 +58,7 @@ pub fn compile(self: *Compiler, ir: *const Ir) !Val {
 }
 
 fn compileImpl(self: *Compiler, irs: []const *const Ir) Error!*ByteCode {
-    const bc = try self.env.memory_manager.allocateByteCode(self.module);
+    const bc = try self.env.memory_manager.allocateByteCode();
     bc.arg_count = self.scopes.scopes.items[0].symbols.items.len;
     for (irs) |ir| try self.addIr(bc, ir);
     bc.locals_count = self.scopes.next_idx - bc.arg_count;
@@ -105,7 +79,6 @@ fn computeStackAction(_: *const Compiler, ir: *const Ir) StackAction {
     return switch (ir.*) {
         .constant => .push,
         .define => .none,
-        .import_module => .none,
         .deref => .push,
         .function_call => .push,
         .if_expr => .push,
@@ -116,13 +89,13 @@ fn computeStackAction(_: *const Compiler, ir: *const Ir) StackAction {
 
 /// Compile instructions to `bc` from `ir`.
 fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
-    const is_module = self.is_module;
-    // Modules consist of the form: Ir{ .ret = <exprs> } where top level <exprs> may call `define`
-    // to `define` something at the module level.
+    const is_toplevel = self.is_toplevel;
+    // Top level IR consist of the form: Ir{ .ret = <exprs> } where top level <exprs> may call
+    // `define` to `define` something at the global level.
     if (@as(Ir.Tag, ir.*) != Ir.Tag.ret) {
-        self.is_module = false;
+        self.is_toplevel = false;
     }
-    defer self.is_module = is_module;
+    defer self.is_toplevel = is_toplevel;
     switch (ir.*) {
         .constant => |c| {
             try bc.instructions.append(
@@ -132,7 +105,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
         },
         .define => |def| {
             if (self.computeStackAction(def.expr) != .push) return Error.BadSyntax;
-            if (is_module) {
+            if (is_toplevel) {
                 const sym = try self.env.memory_manager.allocateSymbol(def.name);
                 try self.addIr(bc, def.expr);
                 try bc.instructions.append(
@@ -148,31 +121,12 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
                 );
             }
         },
-        .import_module => |m| {
-            if (!is_module) {
-                return Error.BadSyntax;
-            }
-            try bc.instructions.append(
-                self.env.memory_manager.allocator,
-                .{ .import_module = try self.env.memory_manager.allocator.dupe(u8, m.path) },
-            );
-        },
         .deref => |s| {
             if (self.scopes.variableIdx(s)) |var_idx| {
                 try bc.instructions.append(self.env.memory_manager.allocator, .{ .get_arg = var_idx });
             } else {
-                const parsed_sym = try Module.parseModuleAndSymbol(s, &self.env.memory_manager);
-                if (self.module_defined_vals.contains(s) or parsed_sym.module_alias != null) {
-                    const module = try self.env.memory_manager.allocator.dupe(u8, parsed_sym.module_alias orelse "");
-                    const local = .{
-                        .module = module,
-                        .sym = parsed_sym.sym,
-                    };
-                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_local = local });
-                } else {
-                    const sym = try self.env.memory_manager.allocateSymbol(s);
-                    try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_global = sym });
-                }
+                const sym = try self.env.memory_manager.allocateSymbol(s);
+                try bc.instructions.append(self.env.memory_manager.allocator, .{ .deref_global = sym });
             }
         },
         .function_call => |f| {
@@ -246,7 +200,7 @@ test "if expression" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = try Compiler.initModule(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}));
+    var compiler = try Compiler.init(std.testing.allocator, &vm.env);
     defer compiler.deinit();
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
@@ -265,7 +219,6 @@ test "if expression" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = vm.getModule(Module.Builder.default_name).?,
         }),
     }, actual);
 }
@@ -280,7 +233,7 @@ test "if expression without false branch returns none" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = try Compiler.initModule(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}));
+    var compiler = try Compiler.init(std.testing.allocator, &vm.env);
     defer compiler.deinit();
     const actual = try compiler.compile(&ir);
     try std.testing.expectEqualDeep(Val{
@@ -299,12 +252,11 @@ test "if expression without false branch returns none" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = vm.getModule(Module.Builder.default_name).?,
         }),
     }, actual);
 }
 
-test "module with define expressions" {
+test "toplevel expression with define expressions" {
     const ir = Ir{
         .ret = .{
             .exprs = @constCast(&[_]*Ir{
@@ -325,7 +277,7 @@ test "module with define expressions" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = try Compiler.initModule(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}));
+    var compiler = try Compiler.init(std.testing.allocator, &vm.env);
     defer compiler.deinit();
     const actual = try compiler.compile(&ir);
     const pi_symbol = try vm.env.memory_manager.allocateSymbol("pi");
@@ -345,12 +297,11 @@ test "module with define expressions" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = vm.getModule(Module.Builder.default_name).?,
         }),
     }, actual);
 }
 
-test "define outside of module creates stack local" {
+test "define outside of global scope creates stack local" {
     const ir = Ir{
         .ret = .{
             .exprs = @constCast(&[_]*Ir{
@@ -371,7 +322,7 @@ test "define outside of module creates stack local" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = try Compiler.initFunction(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}), &.{});
+    var compiler = try Compiler.initFunction(std.testing.allocator, &vm.env, &.{});
     defer compiler.deinit();
 
     const actual = try compiler.compile(&ir);
@@ -390,7 +341,6 @@ test "define outside of module creates stack local" {
                 }),
                 .capacity = actual.bytecode.instructions.capacity,
             },
-            .module = vm.getModule(Module.Builder.default_name).?,
         }),
     }, actual);
 }
@@ -410,7 +360,7 @@ test "define in bad context produces error" {
     };
     var vm = try Vm.init(std.testing.allocator);
     defer vm.deinit();
-    var compiler = try Compiler.initModule(std.testing.allocator, &vm.env, try vm.getOrCreateModule(.{}));
+    var compiler = try Compiler.init(std.testing.allocator, &vm.env);
     defer compiler.deinit();
     try std.testing.expectError(Error.BadSyntax, compiler.compile(&ir));
 }

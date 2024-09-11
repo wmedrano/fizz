@@ -3,7 +3,6 @@ const Symbol = Val.Symbol;
 const Val = @import("val.zig").Val;
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
-const Module = @import("Module.zig");
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -12,14 +11,11 @@ name: []const u8,
 arg_count: usize,
 locals_count: usize,
 instructions: std.ArrayListUnmanaged(Instruction),
-module: *Module,
 
 pub fn deinit(self: *ByteCode, allocator: std.mem.Allocator) void {
     allocator.free(self.name);
     for (self.instructions.items) |i| {
         switch (i) {
-            .deref_local => |sym| allocator.free(sym.module),
-            .import_module => |path| allocator.free(path),
             else => {},
         }
     }
@@ -53,7 +49,6 @@ const ByteCodeValuesIter = struct {
             self.instructions.len -= 1;
             switch (instruction) {
                 .push_const => |v| return v,
-                .deref_local => {},
                 .deref_global => {},
                 .get_arg => {},
                 .define => {},
@@ -61,7 +56,6 @@ const ByteCodeValuesIter = struct {
                 .eval => {},
                 .jump => {},
                 .jump_if => {},
-                .import_module => {},
                 .ret => {},
             }
         }
@@ -80,9 +74,7 @@ pub fn iterateVals(self: *const ByteCode) ByteCodeValuesIter {
 pub const Instruction = union(enum) {
     /// Push a constant onto the stack.
     push_const: Val,
-    /// Dereference the symbol from the current module.
-    deref_local: struct { module: []const u8, sym: Symbol },
-    /// Dereference the symbol from the global module.
+    /// Dereference a global symbol.
     deref_global: Symbol,
     /// Get the nth value (0-based index) from the base of the current function call stack.
     get_arg: usize,
@@ -96,8 +88,6 @@ pub const Instruction = union(enum) {
     jump: usize,
     /// Jump instructions in the bytecode if the top value of the stack is true.
     jump_if: usize,
-    /// Import a module.
-    import_module: []const u8,
     /// Return the top value of the stack. The following should occur:
     ///   1. The top value is the return_value.
     ///   2. All items on the current function stack are popped.
@@ -123,13 +113,11 @@ pub const Instruction = union(enum) {
         switch (self.*) {
             .push_const => |v| try writer.print("push_const({any})", .{v}),
             .deref_global => |sym| try writer.print("deref_global({d})", .{sym.id}),
-            .deref_local => |sym| try writer.print("deref_local({s}, {d})", .{ sym.module, sym.sym.id }),
             .get_arg => |n| try writer.print("get_arg({d})", .{n}),
             .move => |n| try writer.print("move({d})", .{n}),
             .eval => |n| try writer.print("eval({d})", .{n}),
             .jump => |n| try writer.print("jump({d})", .{n}),
             .jump_if => |n| try writer.print("jump_if({d})", .{n}),
-            .import_module => |m| try writer.print("import({s})", .{m}),
             .ret => try writer.print("ret()", .{}),
             .define => |sym| try writer.print("define({d})", .{sym.id}),
         }

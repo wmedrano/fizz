@@ -14,7 +14,7 @@ nav_order: 2
 Values - `(define <name> <value>)`
 Functions - `(define (<name> <args...>) <expr>...)`
 
-Define a value within the current module that can be referenced.
+Define a value that can be referenced.
 
 ```lisp
 >> (define x 12)
@@ -82,17 +82,6 @@ $3 = true
 $1 = 10
 >> (apply + (list 1 2 3 4))
 $2 = 10
-```
-
-### \*modules\*
-
-`(*modules*)`
-
-Get all the available modules as a list of strings.
-
-```lisp
->> (modules)
-$1 = ("*global*" "my-module.fizz")
 ```
 
 

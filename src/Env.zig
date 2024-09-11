@@ -1,14 +1,12 @@
 const Env = @This();
 
 const std = @import("std");
-const Module = @import("Module.zig");
 const Ast = @import("Ast.zig");
 const Val = @import("val.zig").Val;
 const ByteCode = @import("ByteCode.zig");
 const Ir = @import("ir.zig").Ir;
 const MemoryManager = @import("MemoryManager.zig");
 const Compiler = @import("Compiler.zig");
-const builtins = @import("builtins.zig");
 const ErrorCollector = @import("datastructures/ErrorCollector.zig");
 
 /// Deals with allocating and deallocating values. This involves garbage collection.
@@ -20,12 +18,8 @@ stack: std.ArrayListUnmanaged(Val),
 /// Holds the stack frames with the final value containing the details of the current function call.
 frames: std.ArrayListUnmanaged(Frame),
 
-/// Holds the global module.
-global_module: Module,
-
-/// Map from module name to the module itself. The Key is a copy of the name within the *Module
-/// corresponding object.
-modules: std.StringHashMapUnmanaged(*Module),
+/// Holds global values.
+global_values: std.AutoHashMapUnmanaged(Val.Symbol, Val),
 
 /// Place to store errors.
 errors: ErrorCollector,
@@ -59,9 +53,6 @@ pub const GcStrategy = enum {
     per_256_calls,
 };
 
-/// The name of the global module.
-pub const global_module_name = "*global*";
-
 /// Create a new virtual machine.
 pub fn init(alloc: std.mem.Allocator) std.mem.Allocator.Error!Env {
     const stack = try std.ArrayListUnmanaged(Val).initCapacity(
@@ -72,21 +63,14 @@ pub fn init(alloc: std.mem.Allocator) std.mem.Allocator.Error!Env {
         alloc,
         std.mem.page_size / @sizeOf(Frame),
     );
-    var env = Env{
+    return Env{
         .memory_manager = MemoryManager.init(alloc),
         .stack = stack,
         .frames = frames,
-        .global_module = .{
-            .name = try alloc.dupe(u8, global_module_name),
-            .values = .{},
-            .alias_to_module = .{},
-        },
-        .modules = .{},
+        .global_values = .{},
         .errors = ErrorCollector.init(alloc),
         .runtime_stats = .{},
     };
-    try builtins.registerAll(&env);
-    return env;
 }
 
 /// Deinitialize a virtual machine. Using self after calling deinit is invalid.
@@ -94,11 +78,7 @@ pub fn deinit(self: *Env) void {
     self.stack.deinit(self.memory_manager.allocator);
     self.frames.deinit(self.memory_manager.allocator);
 
-    self.global_module.deinitLocal(self.memory_manager.allocator);
-    var modules_iterator = self.modules.valueIterator();
-    while (modules_iterator.next()) |module| module.*.deinit(self.memory_manager.allocator);
-    self.modules.deinit(self.memory_manager.allocator);
-
+    self.global_values.deinit(self.memory_manager.allocator);
     self.memory_manager.deinit();
     self.errors.deinit();
 }

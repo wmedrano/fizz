@@ -50,8 +50,8 @@ test "golden test" {
         \\$25: (1 2)
         \\$26: "------------------------------------------------------------"
         \\$27: "test structs"
-        \\$28: (struct 'hello "world" 'id 0)
-        \\$29: (struct 'hello "world" 'id 100)
+        \\$28: (struct 'id 0 'hello "world")
+        \\$29: (struct 'id 100 'hello "world")
         \\$30: "world"
         \\$31: "------------------------------------------------------------"
         \\$32: "test fib"
@@ -62,9 +62,6 @@ test "golden test" {
         \\$37: true
         \\$38: true
         \\$39: "------------------------------------------------------------"
-        \\$40: "test modules"
-        \\$41: ("*global*" "/dev/null" "*default*")
-        \\$42: "------------------------------------------------------------"
         \\
     ;
     try std.testing.expectEqualStrings(expected, actual);
@@ -72,11 +69,7 @@ test "golden test" {
 }
 
 fn runAst(allocator: std.mem.Allocator, writer: anytype, vm: *fizz.Vm, expr_number: *usize, ast: *const fizz.Ast.Node) !void {
-    var compiler = try fizz.Compiler.initModule(
-        allocator,
-        &vm.env,
-        try vm.getOrCreateModule(.{}),
-    );
+    var compiler = try fizz.Compiler.init(allocator, &vm.env);
     defer compiler.deinit();
     const ir = try fizz.Ir.init(allocator, &vm.env.errors, &[1]fizz.Ast.Node{ast.*});
     defer ir.deinit(allocator);

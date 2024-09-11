@@ -6,34 +6,33 @@ const Env = @import("Env.zig");
 const Vm = @import("Vm.zig");
 const std = @import("std");
 
-pub fn registerAll(env: *Env) !void {
-    try env.global_module.setVal(env, "*modules*", .{ .native_fn = .{ .impl = modules } });
-    try env.global_module.setVal(env, "do", .{ .native_fn = .{ .impl = do } });
-    try env.global_module.setVal(env, "apply", .{ .native_fn = .{ .impl = apply } });
-    try env.global_module.setVal(env, "->str", .{ .native_fn = .{ .impl = toStr } });
-    try env.global_module.setVal(env, "=", .{ .native_fn = .{ .impl = equal } });
-    try env.global_module.setVal(env, "str-len", .{ .native_fn = .{ .impl = strLen } });
-    try env.global_module.setVal(env, "str-concat", .{ .native_fn = .{ .impl = strConcat } });
-    try env.global_module.setVal(env, "str-substr", .{ .native_fn = .{ .impl = strSubstr } });
-    try env.global_module.setVal(env, "struct", .{ .native_fn = .{ .impl = makeStruct } });
-    try env.global_module.setVal(env, "struct-set!", .{ .native_fn = .{ .impl = structSet } });
-    try env.global_module.setVal(env, "struct-get", .{ .native_fn = .{ .impl = structGet } });
-    try env.global_module.setVal(env, "list", .{ .native_fn = .{ .impl = list } });
-    try env.global_module.setVal(env, "list?", .{ .native_fn = .{ .impl = listPred } });
-    try env.global_module.setVal(env, "len", .{ .native_fn = .{ .impl = len } });
-    try env.global_module.setVal(env, "first", .{ .native_fn = .{ .impl = first } });
-    try env.global_module.setVal(env, "rest", .{ .native_fn = .{ .impl = rest } });
-    try env.global_module.setVal(env, "nth", .{ .native_fn = .{ .impl = nth } });
-    try env.global_module.setVal(env, "map", .{ .native_fn = .{ .impl = map } });
-    try env.global_module.setVal(env, "filter", .{ .native_fn = .{ .impl = filter } });
-    try env.global_module.setVal(env, "+", .{ .native_fn = .{ .impl = add } });
-    try env.global_module.setVal(env, "-", .{ .native_fn = .{ .impl = subtract } });
-    try env.global_module.setVal(env, "*", .{ .native_fn = .{ .impl = multiply } });
-    try env.global_module.setVal(env, "/", .{ .native_fn = .{ .impl = divide } });
-    try env.global_module.setVal(env, "<", .{ .native_fn = .{ .impl = less } });
-    try env.global_module.setVal(env, "<=", .{ .native_fn = .{ .impl = lessEq } });
-    try env.global_module.setVal(env, ">", .{ .native_fn = .{ .impl = greater } });
-    try env.global_module.setVal(env, ">=", .{ .native_fn = .{ .impl = greaterEq } });
+pub fn registerAll(vm: *Vm) !void {
+    try vm.registerGlobalFn("do", do);
+    try vm.registerGlobalFn("apply", apply);
+    try vm.registerGlobalFn("->str", toStr);
+    try vm.registerGlobalFn("=", equal);
+    try vm.registerGlobalFn("str-len", strLen);
+    try vm.registerGlobalFn("str-concat", strConcat);
+    try vm.registerGlobalFn("str-substr", strSubstr);
+    try vm.registerGlobalFn("struct", makeStruct);
+    try vm.registerGlobalFn("struct-set!", structSet);
+    try vm.registerGlobalFn("struct-get", structGet);
+    try vm.registerGlobalFn("list", list);
+    try vm.registerGlobalFn("list?", listPred);
+    try vm.registerGlobalFn("len", len);
+    try vm.registerGlobalFn("first", first);
+    try vm.registerGlobalFn("rest", rest);
+    try vm.registerGlobalFn("nth", nth);
+    try vm.registerGlobalFn("map", map);
+    try vm.registerGlobalFn("filter", filter);
+    try vm.registerGlobalFn("+", add);
+    try vm.registerGlobalFn("-", subtract);
+    try vm.registerGlobalFn("*", multiply);
+    try vm.registerGlobalFn("/", divide);
+    try vm.registerGlobalFn("<", less);
+    try vm.registerGlobalFn("<=", lessEq);
+    try vm.registerGlobalFn(">", greater);
+    try vm.registerGlobalFn(">=", greaterEq);
 }
 
 fn equalImpl(a: Val, b: Val) Error!bool {
@@ -70,22 +69,6 @@ fn equal(_: *Vm, vals: []const Val) Error!Val {
     if (vals.len != 2) return Error.ArrityError;
     if (vals[0].tag() != vals[1].tag()) return Error.TypeError;
     return .{ .boolean = try equalImpl(vals[0], vals[1]) };
-}
-
-fn modules(vm: *Vm, vals: []const Val) Error!Val {
-    if (vals.len != 0) return Error.ArrityError;
-    const module_count = 1 + vm.env.modules.count();
-    var ret = vm.env.memory_manager.allocateListOfNone(module_count) catch return Error.RuntimeError;
-    ret[0] = vm.env.memory_manager.allocateStringVal(vm.env.global_module.name) catch return Error.RuntimeError;
-
-    var modules_iter = vm.env.modules.keyIterator();
-    var idx: usize = 0;
-    while (modules_iter.next()) |m| {
-        idx += 1;
-        ret[idx] = vm.env.memory_manager.allocateStringVal(m.*) catch return Error.RuntimeError;
-    }
-
-    return .{ .list = ret };
 }
 
 fn do(_: *Vm, vals: []const Val) Error!Val {
@@ -460,10 +443,4 @@ fn greaterEq(_: *Vm, vals: []const Val) Error!Val {
         }
     };
     return .{ .boolean = try numbersAreOrdered(vals, impl.pred) };
-}
-
-test "register_all does not fail" {
-    var vm = try Vm.init(std.testing.allocator);
-    try registerAll(&vm.env);
-    defer vm.deinit();
 }

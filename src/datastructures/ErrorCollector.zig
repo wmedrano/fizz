@@ -38,6 +38,6 @@ pub fn addError(self: *ErrorCollector, comptime fmt: []const u8, args: anytype) 
 pub fn format(self: *const ErrorCollector, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
     @setCold(true);
     for (self.errors.items) |err| {
-        try writer.print("{any}\n", .{err});
+        try writer.print("{s}\n", .{err});
     }
 }

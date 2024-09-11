@@ -23,7 +23,7 @@ Zig**.
 
 1. Download Fizz and place it in `build.zig.zon`.
    ```sh
-   zig fetch --save https://github.com/wmedrano/fiz/archive/refs/tags/v0.2.1.tar.gz
+   zig fetch --save https://github.com/wmedrano/fiz/archive/refs/tags/v0.3.0.tar.gz
    ```
 1. Add Fizz as a dependency in `build.zig`.
    ```zig
@@ -81,12 +81,6 @@ It should be easy to get started writing Fizz. Fizz supports the following:
  > >> "hello world"
  > >> (list 1 2 3 4)
  > >> (struct 'field "yes" 'the-list (list 1 2 3 4))
- > ```
-- Module system for code organization.
- > ```lisp
- > (import "src/my-module.fizz") ;; Import a fizz script as a module.
- > (define radius 10)
- > (my-module/circle-area radius) ;; Reference values with <filename>/<identifier>.
  > ```
 
 ### Zig Integration
