@@ -11,6 +11,9 @@ Fizz is a **simple** interpretted programming language meant for **embedding in
 Zig**.
 
 {: .warning}
+> Requires Zig 0.13.0
+
+{: .warning}
 > Fizz is not yet in a stable state. If you have a use case that you would like
 > handled, file an [🪲 issue](https://github.com/wmedrano/fizz/issues).
 

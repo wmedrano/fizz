@@ -287,7 +287,6 @@ pub fn evalNoReset(self: *Vm, func: Val, args: []const Val) Error!Val {
                 self.env.stack.items = self.env.stack.items[0..stack_start];
                 return ret;
             } else {
-                @setCold(true);
                 return .none;
             }
         },
@@ -406,7 +405,6 @@ fn executeDefine(self: *Vm, symbol: Symbol) Error!void {
 }
 
 fn errSymbolNotFound(self: *Vm, sym: Symbol) Error {
-    @setCold(true);
     const name = self.env.memory_manager.symbols.getName(sym) orelse "*unknown-symbol*";
     try self.env.errors.addError(
         "Symbol {s} (id={d}) not found in global values",
