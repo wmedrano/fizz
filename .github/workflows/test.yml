@@ -11,10 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - uses: goto-bus-stop/setup-zig@v2
-      - run: zig build test
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: goto-bus-stop/setup-zig@v2
-      - run: zig fmt --check .
+        with:
+          zig-version: 0.13.0
+      - name: test
+        run: zig build test
+      - name: lint
+        run: zig fmt --check .
+        if: always()
