@@ -20,11 +20,11 @@ following tradeoffs may happen:
 
 ## Releases
 
-### 0.3.0 (In Progress)
+### 0.3.0 (Current)
 
-- Remove modules. Their implementation was hard to iterate on.
+- Remove modules. Their implementation was too hacky.
 
-### 0.2.1 (Current)
+### 0.2.1
 
 - Improved performance by interning symbol strings.
 - `(define (<name> <arg>...) <expr>...)` syntax available for functions.
