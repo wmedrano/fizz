@@ -32,7 +32,6 @@ pub fn deinit(self: *Vm) void {
 /// Evaluate a single expression from the string.
 ///
 /// allocator - Allocator used to allocate any slices or strings for the return value.
-/// module - The module to run the expression in or "*default*" if null.
 /// expr - The fizz expression to evaluate.
 ///
 /// Note: The returned Val is only valid until the next garbage collection call.
@@ -413,12 +412,6 @@ fn errSymbolNotFound(self: *Vm, sym: Symbol) Error {
         "Symbol {s} (id={d}) not found in global values",
         .{ name, sym.id },
     );
-    return Error.SymbolNotFound;
-}
-
-fn errModuleNotFound(self: *Vm, module_name: []const u8) Error {
-    @setCold(true);
-    try self.env.errors.addError("Module {s} not found", .{module_name});
     return Error.SymbolNotFound;
 }
 

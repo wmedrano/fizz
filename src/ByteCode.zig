@@ -74,7 +74,7 @@ pub fn iterateVals(self: *const ByteCode) ByteCodeValuesIter {
 pub const Instruction = union(enum) {
     /// Push a constant onto the stack.
     push_const: Val,
-    /// Dereference the symbol from the global module.
+    /// Dereference a global symbol.
     deref_global: Symbol,
     /// Get the nth value (0-based index) from the base of the current function call stack.
     get_arg: usize,

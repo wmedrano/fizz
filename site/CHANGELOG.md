@@ -20,6 +20,10 @@ following tradeoffs may happen:
 
 ## Releases
 
+### 0.3.0 (In Progress)
+
+- Remove modules. Their implementation was hard to iterate on.
+
 ### 0.2.1 (Current)
 
 - Improved performance by interning symbol strings.

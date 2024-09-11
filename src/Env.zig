@@ -53,9 +53,6 @@ pub const GcStrategy = enum {
     per_256_calls,
 };
 
-/// The name of the global module.
-pub const global_module_name = "*global*";
-
 /// Create a new virtual machine.
 pub fn init(alloc: std.mem.Allocator) std.mem.Allocator.Error!Env {
     const stack = try std.ArrayListUnmanaged(Val).initCapacity(

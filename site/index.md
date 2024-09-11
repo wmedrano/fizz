@@ -82,12 +82,6 @@ It should be easy to get started writing Fizz. Fizz supports the following:
  > >> (list 1 2 3 4)
  > >> (struct 'field "yes" 'the-list (list 1 2 3 4))
  > ```
-- Module system for code organization.
- > ```lisp
- > (import "src/my-module.fizz") ;; Import a fizz script as a module.
- > (define radius 10)
- > (my-module/circle-area radius) ;; Reference values with <filename>/<identifier>.
- > ```
 
 ### Zig Integration
 

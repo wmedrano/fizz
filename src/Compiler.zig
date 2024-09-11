@@ -23,7 +23,7 @@ scopes: ScopeManager,
 ///   - Define statements set global values.
 is_toplevel: bool = false,
 
-/// Initialize a compiler for a function that lives inside `module`.
+/// Initialize a compiler for a function.
 pub fn initFunction(allocator: std.mem.Allocator, env: *Env, args: []const []const u8) !Compiler {
     const scopes = try ScopeManager.initWithArgs(allocator, args);
     return .{
@@ -89,13 +89,13 @@ fn computeStackAction(_: *const Compiler, ir: *const Ir) StackAction {
 
 /// Compile instructions to `bc` from `ir`.
 fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
-    const is_module = self.is_toplevel;
-    // Modules consist of the form: Ir{ .ret = <exprs> } where top level <exprs> may call `define`
-    // to `define` something at the module level.
+    const is_toplevel = self.is_toplevel;
+    // Top level IR consist of the form: Ir{ .ret = <exprs> } where top level <exprs> may call
+    // `define` to `define` something at the global level.
     if (@as(Ir.Tag, ir.*) != Ir.Tag.ret) {
         self.is_toplevel = false;
     }
-    defer self.is_toplevel = is_module;
+    defer self.is_toplevel = is_toplevel;
     switch (ir.*) {
         .constant => |c| {
             try bc.instructions.append(
@@ -105,7 +105,7 @@ fn addIr(self: *Compiler, bc: *ByteCode, ir: *const Ir) Error!void {
         },
         .define => |def| {
             if (self.computeStackAction(def.expr) != .push) return Error.BadSyntax;
-            if (is_module) {
+            if (is_toplevel) {
                 const sym = try self.env.memory_manager.allocateSymbol(def.name);
                 try self.addIr(bc, def.expr);
                 try bc.instructions.append(
@@ -256,7 +256,7 @@ test "if expression without false branch returns none" {
     }, actual);
 }
 
-test "module with define expressions" {
+test "toplevel expression with define expressions" {
     const ir = Ir{
         .ret = .{
             .exprs = @constCast(&[_]*Ir{
@@ -301,7 +301,7 @@ test "module with define expressions" {
     }, actual);
 }
 
-test "define outside of module creates stack local" {
+test "define outside of global scope creates stack local" {
     const ir = Ir{
         .ret = .{
             .exprs = @constCast(&[_]*Ir{
