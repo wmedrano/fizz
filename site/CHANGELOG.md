@@ -9,6 +9,9 @@ nav_order: 4
 
 ## Roadmap
 
+For current plans see the current milestones on
+[GitHub](https://github.com/wmedrano/fizz/milestones).
+
 Fizz aims to deliver on **simpilicity** and **Zig integration**. This means the
 following tradeoffs may happen:
 
