@@ -70,7 +70,7 @@ fn initImpl(allocator: std.mem.Allocator, errors: *ErrorCollector, t: *Tokenizer
             },
             .closeParen => {
                 if (!want_close) {
-                    try errors.addError(.{ .msg = "Unmatched close parenthesis" });
+                    try errors.addError("Unmatched close parenthesis", .{});
                     return SyntaxError.UnmatchedCloseParenthesis;
                 }
                 has_close = true;
@@ -87,7 +87,7 @@ fn initImpl(allocator: std.mem.Allocator, errors: *ErrorCollector, t: *Tokenizer
         }
     }
     if (want_close and !has_close) {
-        try errors.addError(.{ .msg = "Unclosed parenthesis" });
+        try errors.addError("Unclosed parenthesis", .{});
         return SyntaxError.UnclosedParenthesis;
     }
     return try result.toOwnedSlice();

@@ -219,7 +219,7 @@ const IrBuilder = struct {
             .leaf => return self.buildLeaf(&ast.leaf),
             .tree => |asts| {
                 if (asts.len == 0) {
-                    try self.errors.addError(.{ .msg = "Got 0 expressions but expected at least 1." });
+                    try self.errors.addError("Got 0 expressions but expected at least 1.", .{});
                     return Error.SyntaxError;
                 }
                 const first = &asts[0];
@@ -231,20 +231,20 @@ const IrBuilder = struct {
                                 .if_expr => {
                                     switch (rest.len) {
                                         0 | 1 => {
-                                            try self.errors.addError(.{ .msg = "If expression expected at least 1 arg" });
+                                            try self.errors.addError("If expression expected at least 1 arg", .{});
                                             return Error.SyntaxError;
                                         },
                                         2 => return self.buildIfExpression(&rest[0], &rest[1], null),
                                         3 => return self.buildIfExpression(&rest[0], &rest[1], &rest[2]),
                                         else => {
-                                            try self.errors.addError(.{ .msg = "If expression expected at most 3 args" });
+                                            try self.errors.addError("If expression expected at most 3 args", .{});
                                             return Error.SyntaxError;
                                         },
                                     }
                                 },
                                 .lambda => {
                                     if (rest.len < 2) {
-                                        try self.errors.addError(.{ .msg = "lambda expected form (lambda (<args>...) <exprs>...)" });
+                                        try self.errors.addError("lambda expected form (lambda (<args>...) <exprs>...)", .{});
                                         return Error.SyntaxError;
                                     }
                                     return self.buildLambdaExpr(name, &rest[0], rest[1..]);
@@ -252,7 +252,7 @@ const IrBuilder = struct {
                                 .define => {
                                     switch (rest.len) {
                                         0 | 1 => {
-                                            try self.errors.addError(.{ .msg = "define expected form (define <ident> <expr>)" });
+                                            try self.errors.addError("define expected form (define <ident> <expr>)", .{});
                                             return Error.SyntaxError;
                                         },
                                         else => return self.buildDefine(&rest[0], rest[1..]),
@@ -260,7 +260,7 @@ const IrBuilder = struct {
                                 },
                                 .import => {
                                     if (rest.len != 1) {
-                                        try self.errors.addError(.{ .msg = "import expected form (import \"<path>\")" });
+                                        try self.errors.addError("import expected form (import \"<path>\")", .{});
                                         return Error.SyntaxError;
                                     }
                                     return self.buildImportModule(&rest[0]);
@@ -283,7 +283,7 @@ const IrBuilder = struct {
     fn buildLeaf(self: *IrBuilder, leaf: *const Ast.Node.Leaf) Error!*Ir {
         const v = switch (leaf.*) {
             .keyword => {
-                try self.errors.addError(.{ .msg = "found unexpected keyword" });
+                try self.errors.addError("found unexpected keyword", .{});
                 return Error.SyntaxError;
             },
             .identifier => |ident| if (ident.len != 0 and ident[0] == 39)
@@ -318,7 +318,7 @@ const IrBuilder = struct {
             .leaf => |l| switch (l) {
                 .identifier => |ident| ident,
                 else => {
-                    try self.errors.addError(.{ .msg = "define expected form (define <ident> <expr>) but <ident> was malformed" });
+                    try self.errors.addError("define expected form (define <ident> <expr>) but <ident> was malformed", .{});
                     return Error.SyntaxError;
                 },
             },
@@ -340,9 +340,10 @@ const IrBuilder = struct {
 
     fn buildDefineLambda(self: *IrBuilder, name_and_args: []const Ast.Node, exprs: []const Ast.Node) Error!*Ir {
         if (name_and_args.len == 0) {
-            try self.errors.addError(.{
-                .msg = "define expected form (define (<ident> <args>...) <expr>) but <ident> was not found",
-            });
+            try self.errors.addError(
+                "define expected form (define (<ident> <args>...) <expr>) but <ident> was not found",
+                .{},
+            );
             return Error.SyntaxError;
         }
         const name = switch (name_and_args[0]) {
@@ -382,7 +383,8 @@ const IrBuilder = struct {
         const path = switch (path_expr.*) {
             .tree => {
                 try self.errors.addError(
-                    .{ .msg = "import expected form (import \"<path>\") but path was malformed" },
+                    "import expected form (import \"<path>\") but path was malformed",
+                    .{},
                 );
                 return Error.SyntaxError;
             },
@@ -390,7 +392,8 @@ const IrBuilder = struct {
                 .string => |ident| ident,
                 else => {
                     try self.errors.addError(
-                        .{ .msg = "import expected form (import \"<path>\") but path was malformed" },
+                        "import expected form (import \"<path>\") but path was malformed",
+                        .{},
                     );
                     return Error.SyntaxError;
                 },
@@ -449,9 +452,7 @@ const IrBuilder = struct {
     /// Build an Ir containing a lambda definition.
     fn buildLambdaExpr(self: *IrBuilder, name: []const u8, arguments: *const Ast.Node, body: []const Ast.Node) Error!*Ir {
         if (body.len == 0) {
-            try self.errors.addError(
-                .{ .msg = "lambda expected form (lambda (<args>...) <exprs>...) but found 0 exprs" },
-            );
+            try self.errors.addError("lambda expected form (lambda (<args>...) <exprs>...) but found 0 exprs", .{});
             return Error.SyntaxError;
         }
         var lambda_builder = IrBuilder{
@@ -462,26 +463,20 @@ const IrBuilder = struct {
         defer lambda_builder.deinit();
         switch (arguments.*) {
             .leaf => {
-                try self.errors.addError(.{
-                    .msg = "lambda expected form (lambda (<args>...) <exprs>...) but found args were not enclosed in parenthesis",
-                });
+                try self.errors.addError("lambda expected form (lambda (<args>...) <exprs>...) but found args were not enclosed in parenthesis", .{});
                 return Error.SyntaxError;
             },
             .tree => |t| {
                 for (0.., t) |arg_idx, arg_name_ast| {
                     switch (arg_name_ast) {
                         .tree => {
-                            try self.errors.addError(.{
-                                .msg = "lambda expected form (lambda (<args>...) <exprs>...) but found args were not valid identifiers",
-                            });
+                            try self.errors.addError("lambda expected form (lambda (<args>...) <exprs>...) but found args were not valid identifiers", .{});
                             return Error.SyntaxError;
                         },
                         .leaf => |l| switch (l) {
                             .identifier => |ident| try lambda_builder.arg_to_idx.put(self.allocator, ident, arg_idx),
                             else => {
-                                try self.errors.addError(.{
-                                    .msg = "lambda expected form (lambda (<args>...) <exprs>...) but found args were not valid identifiers",
-                                });
+                                try self.errors.addError("lambda expected form (lambda (<args>...) <exprs>...) but found args were not valid identifiers", .{});
                                 return Error.SyntaxError;
                             },
                         },

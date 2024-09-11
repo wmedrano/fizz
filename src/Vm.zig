@@ -134,12 +134,10 @@ pub fn toZig(self: *Vm, T: type, alloc: std.mem.Allocator, val: Val) !T {
                     errdefer toZigClean(field.type, alloc, field_zig_val, null);
                     @field(ret, field.name) = field_zig_val;
                 } else {
-                    const msg: []const u8 = std.fmt.allocPrint(
-                        self.env.errors.allocator(),
+                    try self.env.errors.addError(
                         "field {s} not found in Fizz struct",
                         .{fizz_field_name},
-                    ) catch return Error.OutOfMemory;
-                    try self.env.errors.addErrorOwned(.{ .msg = msg });
+                    );
                     return Error.TypeError;
                 }
             }
@@ -412,7 +410,7 @@ fn executeGetArg(self: *Vm, frame: *const Env.Frame, idx: usize) !void {
 
 fn executeMove(self: *Vm, frame: *const Env.Frame, idx: usize) !void {
     const v = self.env.stack.popOrNull() orelse {
-        try self.env.errors.addError(.{ .msg = "unexpected code branch reached, file a GitHub issue" });
+        try self.env.errors.addError("unexpected code branch reached, file a GitHub issue", .{});
         return error.RuntimeError;
     };
     self.env.stack.items[frame.stack_start + idx] = v;
@@ -430,12 +428,10 @@ fn executeEval(self: *Vm, frame: *const Env.Frame, n: usize) !void {
     switch (func) {
         .bytecode => |bc| {
             if (bc.arg_count != arg_count) {
-                const msg = try std.fmt.allocPrint(
-                    self.env.errors.allocator(),
+                try self.env.errors.addError(
                     "Function {s} received {d} arguments but expected {d}",
                     .{ bc.name, arg_count, bc.arg_count },
                 );
-                try self.env.errors.addErrorOwned(.{ .msg = msg });
                 return error.ArrityError;
             }
             try self.env.stack.appendNTimes(self.valAllocator(), .none, bc.locals_count);
@@ -452,12 +448,10 @@ fn executeEval(self: *Vm, frame: *const Env.Frame, n: usize) !void {
             self.env.stack.items = self.env.stack.items[0..stack_start];
         },
         else => {
-            const msg = try std.fmt.allocPrint(
-                self.env.errors.allocator(),
+            try self.env.errors.addError(
                 "Expected to evaluate value of type function but got {any}",
                 .{func.tag()},
             );
-            try self.env.errors.addErrorOwned(.{ .msg = msg });
             return error.TypeError;
         },
     }
@@ -481,24 +475,20 @@ fn executeDefine(self: *Vm, module: *Module, symbol_id: Symbol) Error!void {
 
 fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Error!void {
     errdefer {
-        self.env.errors.addError(ErrorCollector.Error{ .msg = "failed to import module" }) catch {};
+        self.env.errors.addError("failed to import module", .{}) catch {};
     }
     const base_dir = module.directory() catch {
-        const msg = try std.fmt.allocPrint(
-            self.env.errors.allocator(),
+        try self.env.errors.addError(
             "could not determine working directory for module {s}",
             .{module.name},
         );
-        try self.env.errors.addErrorOwned(.{ .msg = msg });
         return Error.FileError;
     };
     const full_path = base_dir.realpathAlloc(self.valAllocator(), module_path) catch {
-        const msg = try std.fmt.allocPrint(
-            self.env.errors.allocator(),
+        try self.env.errors.addError(
             "could not determine path for {s}",
             .{module_path},
         );
-        try self.env.errors.addErrorOwned(.{ .msg = msg });
         return Error.FileError;
     };
     defer self.valAllocator().free(full_path);
@@ -512,12 +502,10 @@ fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Erro
     defer arena.deinit();
     const file_size_limit = 64 * 1024 * 1024;
     const contents = std.fs.cwd().readFileAlloc(arena.allocator(), full_path, file_size_limit) catch {
-        const msg = try std.fmt.allocPrint(
-            self.env.errors.allocator(),
+        try self.env.errors.addError(
             "could not read file {any}",
             .{full_path},
         );
-        try self.env.errors.addErrorOwned(.{ .msg = msg });
         return Error.FileError;
     };
     const ast = Ast.initWithStr(arena.allocator(), &self.env.errors, contents) catch return Error.SyntaxError;
@@ -535,19 +523,16 @@ fn executeImportModule(self: *Vm, module: *Module, module_path: []const u8) Erro
 fn errSymbolNotFound(self: *Vm, module: *const Module, sym: Symbol) Error {
     @setCold(true);
     const name = self.env.memory_manager.symbols.getName(sym) orelse "*unknown-symbol*";
-    const msg = try std.fmt.allocPrint(
-        self.env.errors.allocator(),
+    try self.env.errors.addError(
         "Symbol {s} (id={d}) not found in module {s}",
         .{ name, sym.id, module.name },
     );
-    try self.env.errors.addErrorOwned(.{ .msg = msg });
     return Error.SymbolNotFound;
 }
 
 fn errModuleNotFound(self: *Vm, module_name: []const u8) Error {
     @setCold(true);
-    const msg = try std.fmt.allocPrint(self.env.errors.allocator(), "Module {s} not found", .{module_name});
-    try self.env.errors.addErrorOwned(.{ .msg = msg });
+    try self.env.errors.addError("Module {s} not found", .{module_name});
     return Error.SymbolNotFound;
 }
 
