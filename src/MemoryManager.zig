@@ -9,8 +9,9 @@ const std = @import("std");
 
 /// The allocator used by all managed data.
 allocator: std.mem.Allocator,
+
 /// The color to tag all data that is reachable as opposed to unreachable. Unreachable data is
-/// cleaned up for garbage collection.
+/// cleaned up for garbage collection on calls to `sweep`.
 reachable_color: Color = Color.red,
 
 /// Contains all the symbols.
@@ -204,6 +205,23 @@ pub fn markVal(self: *MemoryManager, v: Val) !void {
     }
 }
 
+fn markKeepAliveVals(self: *MemoryManager) !void {
+    var strings_iter = self.keep_alive_strings.keyIterator();
+    while (strings_iter.next()) |v| try self.markVal(.{ .string = v.* });
+
+    var list_iter = self.keep_alive_lists.keyIterator();
+    while (list_iter.next()) |v| {
+        if (self.lists.get(v.*)) |len_and_color|
+            try self.markVal(.{ .list = v.*[0..len_and_color.len] });
+    }
+
+    var structs_iter = self.keep_alive_structs.keyIterator();
+    while (structs_iter.next()) |v| try self.markVal(.{ .structV = v.* });
+
+    var bytecode_iter = self.keep_alive_bytecode.keyIterator();
+    while (bytecode_iter.next()) |v| try self.markVal(.{ .bytecode = v.* });
+}
+
 /// Sweep all values that are unreachable and reset the color marking. For garbage collection, you
 /// typically want to:
 ///   1. Call `self.markVal` on all reachable `Val` objects.
@@ -212,7 +230,7 @@ pub fn markVal(self: *MemoryManager, v: Val) !void {
 pub fn sweep(self: *MemoryManager) !void {
     var tmp_arena = std.heap.ArenaAllocator.init(self.allocator);
     defer tmp_arena.deinit();
-
+    try self.markKeepAliveVals();
     var string_free_targets = std.ArrayList([]const u8).init(tmp_arena.allocator());
     var strings_iter = self.strings.iterator();
     while (strings_iter.next()) |entry| {

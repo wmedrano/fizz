@@ -205,21 +205,6 @@ pub fn runGc(self: *Vm) !void {
         try self.env.memory_manager.markVal(v.*);
     }
 
-    var strings_iter = self.env.memory_manager.keep_alive_strings.keyIterator();
-    while (strings_iter.next()) |v| try self.env.memory_manager.markVal(.{ .string = v.* });
-
-    var list_iter = self.env.memory_manager.keep_alive_lists.keyIterator();
-    while (list_iter.next()) |v| {
-        if (self.env.memory_manager.lists.get(v.*)) |len_and_color|
-            try self.env.memory_manager.markVal(.{ .list = v.*[0..len_and_color.len] });
-    }
-
-    var structs_iter = self.env.memory_manager.keep_alive_structs.keyIterator();
-    while (structs_iter.next()) |v| try self.env.memory_manager.markVal(.{ .structV = v.* });
-
-    var bytecode_iter = self.env.memory_manager.keep_alive_bytecode.keyIterator();
-    while (bytecode_iter.next()) |v| try self.env.memory_manager.markVal(.{ .bytecode = v.* });
-
     try self.env.memory_manager.sweep();
 }
 
